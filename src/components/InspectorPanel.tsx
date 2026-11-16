@@ -10,6 +10,8 @@ import {
   getBoard,
   getPeripheral,
   lintCircuit,
+  autoFixCircuit,
+  scoreDiagnostics,
 } from "@/lib/hardwareEngine";
 import {
   type FirmwareLanguage,
@@ -57,16 +59,6 @@ export interface InspectorPanelProps {
 function clampHealth(score: number): number {
   if (!Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-function computeHealthScore(diagnostics: Diagnostic[]): number {
-  let score = 100;
-  for (const d of diagnostics) {
-    if (d.severity === "CRITICAL") score -= 25;
-    else if (d.severity === "WARNING") score -= 10;
-    else if (d.severity === "INFO") score -= 3;
-  }
-  return clampHealth(score);
 }
 
 function healthColor(score: number): string {
@@ -349,7 +341,10 @@ function LintTab({
     return map;
   }, [diagnostics]);
 
-  const fixable = grouped.CRITICAL.length + grouped.WARNING.length;
+  const fixable = useMemo(
+    () => autoFixCircuit(circuitState).changes.length,
+    [circuitState],
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -692,7 +687,7 @@ export function InspectorPanel({
     () =>
       typeof healthScore === "number"
         ? clampHealth(healthScore)
-        : computeHealthScore(liveDiagnostics),
+        : scoreDiagnostics(liveDiagnostics),
     [healthScore, liveDiagnostics],
   );
 

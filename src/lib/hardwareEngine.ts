@@ -96,19 +96,589 @@ export interface Wire {
   to: { componentId: string; pinId: string };
 }
 
+export interface PinState {
+  componentId: string;
+  pinId: string;
+  direction?: "input" | "output" | "bidirectional";
+  level?: "HIGH" | "LOW" | "FLOATING";
+}
+
+export type CircuitFaultType = "open" | "floating" | "brownout";
+
+export interface CircuitFault {
+  id: string;
+  type: CircuitFaultType;
+  componentId?: string;
+  pinId?: string;
+  rail?: "3.3V" | "5V";
+  note?: string;
+}
+
 export interface CircuitState {
   components: ComponentInstance[];
   wires: Wire[];
-  pinStates?: Array<{
-    componentId: string;
-    pinId: string;
-    direction?: "input" | "output" | "bidirectional";
-    level?: "HIGH" | "LOW" | "FLOATING";
-  }>;
+  pinStates?: PinState[];
+  faults?: CircuitFault[];
 }
 
 function pin(id: string, label: string, modes: PinMode[], extra: Partial<Pin> = {}): Pin {
   return { id, label, modes, ...extra };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeEndpoint(value: unknown): { componentId: string; pinId: string } | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.componentId !== "string" || typeof value.pinId !== "string") {
+    return null;
+  }
+  if (value.componentId.trim().length === 0 || value.pinId.trim().length === 0) {
+    return null;
+  }
+  return { componentId: value.componentId, pinId: value.pinId };
+}
+
+/**
+ * Validate and normalize data that may come from the database, an API request,
+ * or an older version of the app. Returns null when the value cannot represent
+ * a circuit at all. Unknown components/wires are dropped rather than allowed to
+ * crash the linter or renderer.
+ */
+export function normalizeCircuitState(input: unknown): CircuitState | null {
+  if (!isRecord(input)) return null;
+  if (!Array.isArray(input.components)) return null;
+
+  const components: ComponentInstance[] = [];
+  const componentIds = new Set<string>();
+  for (const raw of input.components) {
+    if (!isRecord(raw)) continue;
+    const id = typeof raw.id === "string" ? raw.id.trim() : "";
+    const kind = raw.kind === "board" || raw.kind === "peripheral" ? raw.kind : null;
+    const refId = typeof raw.refId === "string" ? raw.refId.trim() : "";
+    if (!id || !kind || !refId || componentIds.has(id)) continue;
+    componentIds.add(id);
+    components.push({
+      id,
+      kind,
+      refId,
+      ...(typeof raw.label === "string" && raw.label.trim().length > 0
+        ? { label: raw.label }
+        : {}),
+    });
+  }
+
+  if (components.length === 0) return null;
+
+  const wires: Wire[] = [];
+  const wireIds = new Set<string>();
+  const rawWires = Array.isArray(input.wires) ? input.wires : [];
+  for (const raw of rawWires) {
+    if (!isRecord(raw)) continue;
+    const from = normalizeEndpoint(raw.from);
+    const to = normalizeEndpoint(raw.to);
+    if (!from || !to) continue;
+    if (!componentIds.has(from.componentId) || !componentIds.has(to.componentId)) continue;
+    if (from.componentId === to.componentId && from.pinId === to.pinId) continue;
+    let id =
+      typeof raw.id === "string" && raw.id.trim().length > 0
+        ? raw.id
+        : `wire_${wires.length + 1}`;
+    while (wireIds.has(id)) id = `${id}_${wires.length + 1}`;
+    wireIds.add(id);
+    wires.push({ id, from, to });
+  }
+
+  const pinStates: PinState[] = [];
+  const pinKeys = new Set<string>();
+  const rawPinStates = Array.isArray(input.pinStates) ? input.pinStates : [];
+  for (const raw of rawPinStates) {
+    if (!isRecord(raw)) continue;
+    const componentId = typeof raw.componentId === "string" ? raw.componentId : "";
+    const pinId = typeof raw.pinId === "string" ? raw.pinId : "";
+    if (!componentId || !pinId || !componentIds.has(componentId)) continue;
+    const key = `${componentId}:${pinId}`;
+    if (pinKeys.has(key)) continue;
+    const direction =
+      raw.direction === "input" ||
+      raw.direction === "output" ||
+      raw.direction === "bidirectional"
+        ? raw.direction
+        : undefined;
+    const level =
+      raw.level === "HIGH" || raw.level === "LOW" || raw.level === "FLOATING"
+        ? raw.level
+        : undefined;
+    pinKeys.add(key);
+    pinStates.push({ componentId, pinId, direction, level });
+  }
+
+  const faults: CircuitFault[] = [];
+  const faultIds = new Set<string>();
+  const rawFaults = Array.isArray(input.faults) ? input.faults : [];
+  for (const raw of rawFaults) {
+    if (!isRecord(raw)) continue;
+    if (raw.type !== "open" && raw.type !== "floating" && raw.type !== "brownout") {
+      continue;
+    }
+    let id =
+      typeof raw.id === "string" && raw.id.trim().length > 0
+        ? raw.id
+        : `fault_${faults.length + 1}`;
+    while (faultIds.has(id)) id = `${id}_${faults.length + 1}`;
+    faultIds.add(id);
+    const componentId =
+      typeof raw.componentId === "string" && componentIds.has(raw.componentId)
+        ? raw.componentId
+        : undefined;
+    const rail = raw.rail === "3.3V" || raw.rail === "5V" ? raw.rail : undefined;
+    faults.push({
+      id,
+      type: raw.type,
+      ...(componentId ? { componentId } : {}),
+      ...(typeof raw.pinId === "string" ? { pinId: raw.pinId } : {}),
+      ...(rail ? { rail } : {}),
+      ...(typeof raw.note === "string" ? { note: raw.note } : {}),
+    });
+  }
+
+  return {
+    components,
+    wires,
+    ...(pinStates.length > 0 ? { pinStates } : {}),
+    ...(faults.length > 0 ? { faults } : {}),
+  };
+}
+
+export function parseCircuitState(json: string): CircuitState | null {
+  try {
+    return normalizeCircuitState(JSON.parse(json));
+  } catch {
+    return null;
+  }
+}
+
+export function scoreDiagnostics(diagnostics: Array<{ severity: DiagnosticSeverity }>): number {
+  let score = 100;
+  for (const d of diagnostics) {
+    if (d.severity === "CRITICAL") score -= 25;
+    else if (d.severity === "WARNING") score -= 10;
+    else score -= 3;
+  }
+  return Math.max(0, Math.min(100, score));
+}
+
+const INPUT_REQUIREMENTS: ReadonlySet<PeripheralPinRequirement["type"]> = new Set([
+  "digital-in",
+  "analog",
+  "uart-rx",
+]);
+
+const OUTPUT_REQUIREMENTS: ReadonlySet<PeripheralPinRequirement["type"]> = new Set([
+  "digital-out",
+  "pwm",
+  "uart-tx",
+]);
+
+export function directionForRequirement(
+  type: PeripheralPinRequirement["type"],
+): "input" | "output" | "bidirectional" {
+  if (INPUT_REQUIREMENTS.has(type)) return "input";
+  if (OUTPUT_REQUIREMENTS.has(type)) return "output";
+  return "bidirectional";
+}
+
+export function pinSupportsRequirement(pin: Pin, req: PeripheralPinRequirement): boolean {
+  switch (req.type) {
+    case "power":
+      return pin.modes.includes("power");
+    case "gnd":
+      return pin.modes.includes("gnd");
+    case "i2c-sda":
+      return pin.modes.includes("i2c-sda") || pin.modes.includes("gpio");
+    case "i2c-scl":
+      return pin.modes.includes("i2c-scl") || pin.modes.includes("gpio");
+    case "pwm":
+      return pin.modes.includes("pwm") && !pin.isInputOnly;
+    case "analog":
+      return pin.modes.includes("analog");
+    case "digital-in":
+      return (
+        (pin.modes.includes("gpio") ||
+          pin.modes.includes("analog") ||
+          pin.modes.includes("input-only")) &&
+        !pin.isFlashConnected
+      );
+    case "digital-out":
+    case "digital-bidir":
+      return pin.modes.includes("gpio") && !pin.isInputOnly && !pin.isFlashConnected;
+    case "uart-tx":
+    case "uart-rx":
+      return pin.modes.includes("uart") && !pin.isInputOnly && !pin.isFlashConnected;
+    default:
+      return false;
+  }
+}
+
+/** Pins reserved for the hardware serial console / bootloader. */
+export const DEFAULT_UART_PINS: Record<string, readonly string[]> = {
+  arduino_uno_r3: ["D0", "D1"],
+  esp32_devkit_v1: ["GPIO1", "GPIO3"],
+};
+
+export function findCompatiblePin(
+  board: Board,
+  req: PeripheralPinRequirement,
+  usedPins: ReadonlySet<string>,
+  options: { allowStrapping?: boolean } = {},
+): Pin | null {
+  const uartReserved = DEFAULT_UART_PINS[board.id] ?? [];
+  const isUartRequirement = req.type === "uart-tx" || req.type === "uart-rx";
+  const candidates = board.pins.filter((candidate) => {
+    if (usedPins.has(candidate.id)) return false;
+    if (!pinSupportsRequirement(candidate, req)) return false;
+    if (candidate.isFlashConnected) return false;
+    if (uartReserved.includes(candidate.id) && !isUartRequirement) return false;
+    if (
+      candidate.isStrapping &&
+      !options.allowStrapping &&
+      req.type !== "power" &&
+      req.type !== "gnd"
+    ) {
+      return false;
+    }
+    return true;
+  });
+  if (candidates.length === 0) return null;
+
+  const nonAdc2 = candidates.filter((candidate) => !candidate.isAdc2);
+  const pool = nonAdc2.length > 0 ? nonAdc2 : candidates;
+  return pool.find((candidate) => !candidate.isInputOnly) ?? pool[0];
+}
+
+export function powerPinVoltage(board: Board, pin: Pin): number | null {
+  if (!pin.modes.includes("power")) return null;
+  if (/3V3|3\.3V/i.test(pin.id)) return board.rails.v3v3?.voltage ?? board.logicVoltage;
+  if (/5V|VIN|VSYS|VBUS/i.test(pin.id)) return board.rails.v5?.voltage ?? 5;
+  return board.logicVoltage;
+}
+
+/**
+ * Pick a supply pin that can actually power the peripheral. Prefers an exact
+ * voltage match, then the rail with the most headroom. Falls back to the
+ * closest rail when the board cannot satisfy the peripheral (the linter will
+ * then explain the mismatch).
+ */
+export function selectPowerPinForPeripheral(
+  board: Board,
+  peripheral: Peripheral,
+): { pin: Pin; voltage: number } | null {
+  const min = peripheral.supplyVoltageMin ?? peripheral.supplyVoltage;
+  const max = peripheral.supplyVoltageMax ?? peripheral.supplyVoltage;
+  const target = Math.min(Math.max(peripheral.supplyVoltage, min), max);
+
+  const candidates = board.pins
+    .filter((candidate) => candidate.modes.includes("power"))
+    .map((candidate) => ({
+      pin: candidate,
+      voltage: powerPinVoltage(board, candidate),
+      rail: candidate.id === "3V3" || candidate.id === "3.3V"
+        ? board.rails.v3v3
+        : board.rails.v5,
+    }))
+    .filter((entry): entry is { pin: Pin; voltage: number; rail: BoardRail | undefined } =>
+      typeof entry.voltage === "number",
+    );
+
+  if (candidates.length === 0) return null;
+
+  const inRange = candidates.filter(
+    (entry) => entry.voltage >= min - 0.01 && entry.voltage <= max + 0.01,
+  );
+  const pool = inRange.length > 0 ? inRange : candidates;
+  pool.sort((a, b) => {
+    const exactA = Math.abs(a.voltage - target);
+    const exactB = Math.abs(b.voltage - target);
+    if (exactA !== exactB) return exactA - exactB;
+    return (b.rail?.maxCurrentMa ?? 0) - (a.rail?.maxCurrentMa ?? 0);
+  });
+
+  const best = pool[0];
+  return { pin: best.pin, voltage: best.voltage };
+}
+
+export function derivePinStates(state: CircuitState): PinState[] {
+  const componentsById = new Map(state.components.map((component) => [component.id, component]));
+  const boardPinState = new Map<string, PinState>();
+
+  const add = (
+    componentId: string,
+    pinId: string,
+    direction: "input" | "output" | "bidirectional",
+  ) => {
+    const key = `${componentId}:${pinId}`;
+    const existing = boardPinState.get(key);
+    if (!existing) {
+      boardPinState.set(key, { componentId, pinId, direction });
+      return;
+    }
+    if (existing.direction !== direction) existing.direction = "bidirectional";
+  };
+
+  for (const wire of state.wires) {
+    const from = componentsById.get(wire.from.componentId);
+    const to = componentsById.get(wire.to.componentId);
+    if (!from || !to) continue;
+
+    for (const [boardEnd, peripheralEnd, boardComponent] of [
+      [wire.from, wire.to, from] as const,
+      [wire.to, wire.from, to] as const,
+    ]) {
+      if (boardComponent.kind !== "board") continue;
+      const otherComponent = componentsById.get(peripheralEnd.componentId);
+      if (!otherComponent) continue;
+
+      if (otherComponent.kind === "peripheral") {
+        const peripheral = PERIPHERALS[otherComponent.refId];
+        const req = peripheral?.pinRequirements.find((entry) => entry.name === peripheralEnd.pinId);
+        if (req && req.type !== "power" && req.type !== "gnd") {
+          add(boardEnd.componentId, boardEnd.pinId, directionForRequirement(req.type));
+        }
+      } else if (boardComponent.id === wire.from.componentId) {
+        add(boardEnd.componentId, boardEnd.pinId, "output");
+      } else {
+        add(boardEnd.componentId, boardEnd.pinId, "input");
+      }
+    }
+  }
+
+  for (const existing of state.pinStates ?? []) {
+    const key = `${existing.componentId}:${existing.pinId}`;
+    const derived = boardPinState.get(key);
+    if (derived) {
+      if (existing.level) derived.level = existing.level;
+    } else {
+      boardPinState.set(key, { ...existing });
+    }
+  }
+
+  return Array.from(boardPinState.values());
+}
+
+export interface AutoFixChange {
+  code: string;
+  description: string;
+}
+
+export interface AutoFixResult {
+  state: CircuitState;
+  changes: AutoFixChange[];
+}
+
+/**
+ * Deterministically repair the circuit issues that can be fixed by rewiring:
+ * unsafe GPIO assignments, pin collisions, disconnected required pins and
+ * power rails outside a peripheral's input range.
+ */
+export function autoFixCircuit(input: CircuitState): AutoFixResult {
+  const normalized = normalizeCircuitState(input);
+  if (!normalized) return { state: { components: [], wires: [] }, changes: [] };
+
+  const state: CircuitState = {
+    components: normalized.components.map((component) => ({ ...component })),
+    wires: normalized.wires.map((wire) => ({
+      id: wire.id,
+      from: { ...wire.from },
+      to: { ...wire.to },
+    })),
+    pinStates: (normalized.pinStates ?? []).map((pinState) => ({ ...pinState })),
+    faults: (normalized.faults ?? []).map((fault) => ({ ...fault })),
+  };
+  const changes: AutoFixChange[] = [];
+  const componentById = () => new Map(state.components.map((component) => [component.id, component]));
+  const boardComponents = () => state.components.filter((component) => component.kind === "board");
+  const boardFor = (componentId: string) => {
+    const component = componentById().get(componentId);
+    return component?.kind === "board" ? BOARDS[component.refId] : undefined;
+  };
+  const otherEnd = (wire: Wire, componentId: string) =>
+    wire.from.componentId === componentId ? wire.to : wire.from;
+
+  const usedBoardPins = (excludeWireId?: string) => {
+    const used = new Set<string>();
+    for (const wire of state.wires) {
+      if (wire.id === excludeWireId) continue;
+      for (const end of [wire.from, wire.to]) {
+        if (componentById().get(end.componentId)?.kind === "board") {
+          used.add(end.pinId);
+        }
+      }
+    }
+    return used;
+  };
+
+  // 1) Move power wires to a rail inside the peripheral's supply range.
+  for (const component of state.components) {
+    if (component.kind !== "peripheral") continue;
+    const peripheral = PERIPHERALS[component.refId];
+    if (!peripheral) continue;
+    const powerReq = peripheral.pinRequirements.find((req) => req.type === "power");
+    if (!powerReq) continue;
+    const wire = state.wires.find(
+      (entry) =>
+        (entry.from.componentId === component.id && entry.from.pinId === powerReq.name) ||
+        (entry.to.componentId === component.id && entry.to.pinId === powerReq.name),
+    );
+    if (!wire) continue;
+    const boardEnd = otherEnd(wire, component.id);
+    const board = boardFor(boardEnd.componentId);
+    if (!board) continue;
+    const currentPin = board.pins.find((candidate) => candidate.id === boardEnd.pinId);
+    if (!currentPin) continue;
+    const currentVoltage = powerPinVoltage(board, currentPin);
+    if (currentVoltage === null) continue;
+    const min = peripheral.supplyVoltageMin ?? peripheral.supplyVoltage;
+    const max = peripheral.supplyVoltageMax ?? peripheral.supplyVoltage;
+    if (currentVoltage >= min - 0.01 && currentVoltage <= max + 0.01) continue;
+
+    const replacement = selectPowerPinForPeripheral(board, peripheral);
+    if (!replacement || replacement.pin.id === currentPin.id) continue;
+    if (
+      replacement.voltage < min - 0.01 ||
+      replacement.voltage > max + 0.01
+    ) {
+      continue;
+    }
+    boardEnd.pinId = replacement.pin.id;
+    changes.push({
+      code: "POWER_RAIL_MISMATCH",
+      description: `Moved ${peripheral.name} VCC from ${currentPin.label} to ${replacement.pin.label}`,
+    });
+  }
+
+  // 2) Reroute unsafe signal pins to a compatible free pin.
+  const diagnostics = lintCircuit(state);
+  const reroutable = new Set([
+    "INPUT_ONLY_PIN_AS_OUTPUT",
+    "ESP32_FLASH_PIN_USED",
+    "ESP32_STRAPPING_PIN_DRIVEN",
+    "PIN_COLLISION",
+  ]);
+  for (const diagnostic of diagnostics) {
+    if (!reroutable.has(diagnostic.code)) continue;
+    for (const pinId of diagnostic.pinIds ?? []) {
+      const boardComponent = boardComponents().find((component) =>
+        BOARDS[component.refId]?.pins.some((candidate) => candidate.id === pinId),
+      );
+      if (!boardComponent) continue;
+      const board = BOARDS[boardComponent.refId];
+      if (!board) continue;
+
+      for (const wire of state.wires) {
+        const boardEnd =
+          wire.from.componentId === boardComponent.id && wire.from.pinId === pinId
+            ? wire.from
+            : wire.to.componentId === boardComponent.id && wire.to.pinId === pinId
+              ? wire.to
+              : null;
+        if (!boardEnd) continue;
+        const perEnd = otherEnd(wire, boardComponent.id);
+        const perComponent = componentById().get(perEnd.componentId);
+        if (perComponent?.kind !== "peripheral") continue;
+        const peripheral = PERIPHERALS[perComponent.refId];
+        const req = peripheral?.pinRequirements.find((entry) => entry.name === perEnd.pinId);
+        if (!peripheral || !req || req.type === "power" || req.type === "gnd") continue;
+
+        const replacement = findCompatiblePin(board, req, usedBoardPins(wire.id));
+        if (!replacement || replacement.id === pinId) continue;
+        boardEnd.pinId = replacement.id;
+        state.pinStates = (state.pinStates ?? []).filter(
+          (pinState) =>
+            !(pinState.componentId === boardComponent.id && pinState.pinId === pinId),
+        );
+        changes.push({
+          code: diagnostic.code,
+          description: `Moved ${peripheral.name} ${req.name} from ${pinId} to ${replacement.label}`,
+        });
+      }
+    }
+  }
+
+  // 3) Remove external pulls that hold GPIO12 HIGH at boot and lower its state.
+  const strapping = diagnostics.find((diagnostic) => diagnostic.code === "ESP32_STRAPPING_GPIO12_HIGH");
+  if (strapping) {
+    const boardComponent = boardComponents().find((component) => BOARDS[component.refId]?.pins.some((candidate) => candidate.id === "GPIO12"));
+    if (boardComponent) {
+      const before = state.wires.length;
+      state.wires = state.wires.filter((wire) => {
+        const involvesGpio12 =
+          (wire.from.componentId === boardComponent.id && wire.from.pinId === "GPIO12") ||
+          (wire.to.componentId === boardComponent.id && wire.to.pinId === "GPIO12");
+        if (!involvesGpio12) return true;
+        const other = otherEnd(wire, boardComponent.id);
+        const otherPin = boardFor(other.componentId)?.pins.find((candidate) => candidate.id === other.pinId);
+        return !(otherPin && (otherPin.modes.includes("power") || otherPin.modes.includes("gnd")));
+      });
+      const removed = before - state.wires.length;
+      const pinState = state.pinStates?.find(
+        (entry) => entry.componentId === boardComponent.id && entry.pinId === "GPIO12",
+      );
+      if (pinState) pinState.level = "LOW";
+      else {
+        state.pinStates = [
+          ...(state.pinStates ?? []),
+          { componentId: boardComponent.id, pinId: "GPIO12", direction: "output", level: "LOW" },
+        ];
+      }
+      changes.push({
+        code: "ESP32_STRAPPING_GPIO12_HIGH",
+        description: `Removed ${removed} external pull-up wire(s) from GPIO12 and set it LOW at boot`,
+      });
+    }
+  }
+
+  // 4) Wire up required peripheral pins that are still disconnected.
+  for (const component of state.components) {
+    if (component.kind !== "peripheral") continue;
+    const peripheral = PERIPHERALS[component.refId];
+    if (!peripheral) continue;
+    const boardComponent = boardComponents()[0];
+    const board = boardComponent ? BOARDS[boardComponent.refId] : undefined;
+    if (!boardComponent || !board) continue;
+
+    for (const req of peripheral.pinRequirements) {
+      const connected = state.wires.some(
+        (wire) =>
+          (wire.from.componentId === component.id && wire.from.pinId === req.name) ||
+          (wire.to.componentId === component.id && wire.to.pinId === req.name),
+      );
+      if (connected) continue;
+
+      const pin =
+        req.type === "power"
+          ? selectPowerPinForPeripheral(board, peripheral)?.pin
+          : req.type === "gnd"
+            ? board.pins.find((candidate) => candidate.modes.includes("gnd"))
+            : findCompatiblePin(board, req, usedBoardPins());
+      if (!pin) continue;
+
+      const wire: Wire = {
+        id: `fix_${state.wires.length + 1}_${req.name}`,
+        from: { componentId: boardComponent.id, pinId: pin.id },
+        to: { componentId: component.id, pinId: req.name },
+      };
+      while (state.wires.some((entry) => entry.id === wire.id)) wire.id = `${wire.id}_x`;
+      state.wires.push(wire);
+      changes.push({
+        code: "UNCONNECTED_PERIPHERAL_PIN",
+        description: `Connected ${peripheral.name} ${req.name} to ${pin.label}`,
+      });
+    }
+  }
+
+  state.pinStates = derivePinStates(state);
+  return { state, changes };
 }
 
 export const BOARDS: Record<string, Board> = {
@@ -398,9 +968,13 @@ export interface ResolvedPin {
 
 export function lintCircuit(state: CircuitState): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
-  const componentsById = new Map(state.components.map((c) => [c.id, c]));
+  const components = Array.isArray(state.components) ? state.components : [];
+  const wires = Array.isArray(state.wires) ? state.wires : [];
+  const pinStates = Array.isArray(state.pinStates) ? state.pinStates : [];
+  const faults = Array.isArray(state.faults) ? state.faults : [];
+  const componentsById = new Map(components.map((c) => [c.id, c]));
   const pinStateIndex = new Map<string, { direction?: "input" | "output" | "bidirectional"; level?: "HIGH" | "LOW" | "FLOATING" }>();
-  for (const ps of state.pinStates ?? []) {
+  for (const ps of pinStates) {
     pinStateIndex.set(`${ps.componentId}:${ps.pinId}`, { direction: ps.direction, level: ps.level });
   }
 
@@ -432,14 +1006,46 @@ export function lintCircuit(state: CircuitState): Diagnostic[] {
     const rb = find(b);
     if (ra !== rb) netParent.set(ra, rb);
   };
-  for (const w of state.wires) union(key(w.from.componentId, w.from.pinId), key(w.to.componentId, w.to.pinId));
+  for (const w of wires) union(key(w.from.componentId, w.from.pinId), key(w.to.componentId, w.to.pinId));
   const nets = new Map<string, Array<{ componentId: string; pinId: string }>>();
-  for (const w of state.wires) {
+  for (const w of wires) {
     for (const end of [w.from, w.to]) {
       const r = find(key(end.componentId, end.pinId));
       if (!nets.has(r)) nets.set(r, []);
       const arr = nets.get(r)!;
       if (!arr.some((e) => e.componentId === end.componentId && e.pinId === end.pinId)) arr.push(end);
+    }
+  }
+
+  // 0) Wires that point at components/pins the engine cannot resolve.
+  for (const w of wires) {
+    for (const end of [w.from, w.to]) {
+      const component = componentsById.get(end.componentId);
+      if (!component) {
+        diagnostics.push({
+          severity: "WARNING",
+          code: "INVALID_CONNECTION",
+          message: `Wire ${w.id} references unknown component "${end.componentId}".`,
+          explanation: "The saved circuit contains a wire endpoint that no longer exists. The wire is ignored when rendering and linting.",
+          fix: "Delete the dangling wire or re-add the missing component.",
+          componentIds: [end.componentId],
+        });
+        continue;
+      }
+      const resolved = resolvePin(end);
+      const pinExists =
+        component.kind === "board" ? Boolean(resolved.pin) : Boolean(resolved.perReq);
+      if (!pinExists) {
+        diagnostics.push({
+          severity: "WARNING",
+          code: "INVALID_CONNECTION",
+          message: `Wire ${w.id} references unknown pin "${end.pinId}" on ${component.label ?? component.refId}.`,
+          explanation: "The pin id does not exist on this board/peripheral definition, so the connection cannot be verified.",
+          fix: "Delete the wire or choose a pin that exists on the selected component.",
+          componentIds: [end.componentId],
+          pinIds: [end.pinId],
+        });
+      }
     }
   }
 
@@ -494,7 +1100,11 @@ export function lintCircuit(state: CircuitState): Diagnostic[] {
     }
   }
 
-  // 3) Voltage domain mismatches
+  // 3) Voltage domain and power rail mismatches
+  const uartReservedPins: Record<string, string[]> = {
+    arduino_uno_r3: ["D0", "D1"],
+    esp32_devkit_v1: ["GPIO1", "GPIO3"],
+  };
   for (const [, endpoints] of nets.entries()) {
     const boardPins = endpoints
       .map((e) => ({ e, r: resolvePin(e) }))
@@ -502,15 +1112,58 @@ export function lintCircuit(state: CircuitState): Diagnostic[] {
     const perPins = endpoints
       .map((e) => ({ e, r: resolvePin(e) }))
       .filter((x): x is { e: { componentId: string; pinId: string }; r: ResolvedPin & { peripheral: Peripheral; perReq: PeripheralPinRequirement } } => Boolean(x.r.peripheral && x.r.perReq));
+
     for (const bp of boardPins) {
       const board = bp.r.board as Board;
       const bpin = bp.r.pin as Pin;
+      if (bpin.modes.includes("reserved")) continue;
+
+      // Supply rails must sit inside the peripheral's rated input range.
+      if (bpin.modes.includes("power")) {
+        const railVoltage = powerPinVoltage(board, bpin);
+        if (railVoltage === null) continue;
+        for (const pp of perPins) {
+          const req = pp.r.perReq as PeripheralPinRequirement;
+          if (req.type !== "power") continue;
+          const min = pp.r.peripheral.supplyVoltageMin ?? pp.r.peripheral.supplyVoltage;
+          const max = pp.r.peripheral.supplyVoltageMax ?? pp.r.peripheral.supplyVoltage;
+          if (railVoltage >= min - 0.01 && railVoltage <= max + 0.01) continue;
+          diagnostics.push({
+            severity: "WARNING",
+            code: "POWER_RAIL_MISMATCH",
+            message: `${pp.r.peripheral.name} is powered from ${board.name} ${bpin.label} (${railVoltage}V), outside its ${min}-${max}V supply range.`,
+            explanation: "Powering a module outside its rated input range can prevent startup, brown it out under load, or permanently damage it.",
+            fix: `Supply ${pp.r.peripheral.name} from a ${pp.r.peripheral.supplyVoltage}V rail (or the range ${min}-${max}V) with a common ground.`,
+            componentIds: [bp.e.componentId, pp.e.componentId],
+            pinIds: [bpin.id, req.name],
+          });
+        }
+        continue;
+      }
+
+      if (bpin.modes.includes("gnd")) continue;
+      if (uartReservedPins[board.id]?.includes(bpin.id)) {
+        for (const pp of perPins) {
+          const req = pp.r.perReq as PeripheralPinRequirement;
+          if (req.type === "uart-tx" || req.type === "uart-rx") continue;
+          if (req.type === "power" || req.type === "gnd") continue;
+          diagnostics.push({
+            severity: "WARNING",
+            code: "UART_PIN_CONFLICT",
+            message: `${board.name} ${bpin.label} is the hardware serial/UART pin but is wired to ${pp.r.peripheral.name} ${req.name}.`,
+            explanation: "D0/D1 on the Uno and GPIO1/GPIO3 on the ESP32 carry the bootloader/serial console. Using them for peripherals can block flashing or corrupt serial output.",
+            fix: "Move the signal to a non-UART GPIO or intentionally use a software serial port.",
+            componentIds: [bp.e.componentId, pp.e.componentId],
+            pinIds: [bpin.id, req.name],
+          });
+        }
+      }
+
       if (board.logicVoltageTolerant5V) continue;
-      if (bpin.modes.includes("power") || bpin.modes.includes("gnd") || bpin.modes.includes("reserved")) continue;
       for (const pp of perPins) {
         const req = pp.r.perReq as PeripheralPinRequirement;
         const sigV = req.voltage;
-        if (!sigV) continue;
+        if (!sigV || req.type === "power" || req.type === "gnd") continue;
         const isSignal = ["digital-in","digital-out","digital-bidir","pwm","analog","uart-tx","uart-rx","i2c-sda","i2c-scl"].includes(req.type);
         if (!isSignal) continue;
         if (sigV > board.logicVoltage) {
@@ -534,7 +1187,7 @@ export function lintCircuit(state: CircuitState): Diagnostic[] {
   }
 
   // 4) Input-only pin misuse
-  for (const ps of state.pinStates ?? []) {
+  for (const ps of pinStates) {
     if (ps.direction !== "output" && ps.direction !== "bidirectional") continue;
     const r = resolvePin({ componentId: ps.componentId, pinId: ps.pinId });
     if (r.board && r.pin && r.pin.isInputOnly) {
@@ -551,7 +1204,7 @@ export function lintCircuit(state: CircuitState): Diagnostic[] {
   }
 
   // 5) ESP32 strapping pin hazards & flash-connected pins
-  for (const ps of state.pinStates ?? []) {
+  for (const ps of pinStates) {
     const r = resolvePin({ componentId: ps.componentId, pinId: ps.pinId });
     if (!r.board || !r.pin) continue;
     if (r.board.id === "esp32_devkit_v1" && r.pin.id === "GPIO12" && ps.level === "HIGH") {
@@ -594,50 +1247,96 @@ export function lintCircuit(state: CircuitState): Diagnostic[] {
     }
   }
 
-  // 6) Current budget on 3.3V/5V rails
-  for (const comp of state.components) {
+  // 6) Required peripheral pins that are not connected.
+  for (const component of components) {
+    if (component.kind !== "peripheral") continue;
+    const peripheral = PERIPHERALS[component.refId];
+    if (!peripheral) continue;
+    for (const req of peripheral.pinRequirements) {
+      const connected = wires.some(
+        (wire) =>
+          (wire.from.componentId === component.id && wire.from.pinId === req.name) ||
+          (wire.to.componentId === component.id && wire.to.pinId === req.name),
+      );
+      if (connected) continue;
+      diagnostics.push({
+        severity: "WARNING",
+        code: "UNCONNECTED_PERIPHERAL_PIN",
+        message: `${peripheral.name} pin ${req.name} is not connected.`,
+        explanation: "Every power, ground and signal pin in the component definition is required for the module to operate as modeled.",
+        fix: `Wire ${peripheral.name} ${req.name} to a compatible board pin.`,
+        componentIds: [component.id],
+        pinIds: [req.name],
+      });
+    }
+  }
+
+  // 7) Explicitly injected faults.
+  for (const fault of faults) {
+    if (fault.type === "open") {
+      diagnostics.push({
+        severity: "CRITICAL",
+        code: "FAULT_OPEN_CIRCUIT",
+        message: `Injected open circuit${fault.note ? `: ${fault.note}` : "."}`,
+        explanation: "An open signal has no current path, so the peripheral will float or never receive its command.",
+        fix: "Reconnect the wire and verify continuity with a multimeter.",
+        componentIds: fault.componentId ? [fault.componentId] : undefined,
+        pinIds: fault.pinId ? [fault.pinId] : undefined,
+      });
+    } else if (fault.type === "floating") {
+      diagnostics.push({
+        severity: "WARNING",
+        code: "FAULT_FLOATING_PIN",
+        message: `Injected floating input${fault.pinId ? ` on ${fault.pinId}` : ""}.`,
+        explanation: "A floating CMOS input picks up noise and can oscillate, producing random readings or false triggers.",
+        fix: "Enable the internal pull-up/pull-down or add an external resistor.",
+        componentIds: fault.componentId ? [fault.componentId] : undefined,
+        pinIds: fault.pinId ? [fault.pinId] : undefined,
+      });
+    } else {
+      diagnostics.push({
+        severity: "CRITICAL",
+        code: "FAULT_POWER_BROWNOUT",
+        message: `Injected brownout on the ${fault.rail ?? "supply"} rail.`,
+        explanation: "Dropping the rail below the regulator's dropout or the MCU's minimum causes resets, corrupted I2C transactions, and unreliable GPIO levels.",
+        fix: "Use a supply with enough headroom, add bulk capacitance, and reduce peak load.",
+        componentIds: fault.componentId ? [fault.componentId] : undefined,
+      });
+    }
+  }
+
+  // 8) Current budget on 3.3V/5V rails
+  for (const comp of components) {
     if (comp.kind !== "board") continue;
     const board = BOARDS[comp.refId];
     if (!board) continue;
     const railLoads: Record<string, number> = { "3.3V": 0, "5V": 0 };
+    const counted = new Set<string>();
     for (const [, endpoints] of nets.entries()) {
-      const boardPowerPins = endpoints.filter((e) => e.componentId === comp.id && (e.pinId === "3V3" || e.pinId === "5V" || e.pinId === "VIN" || e.pinId === "VSYS"));
-      if (boardPowerPins.length === 0) continue;
-      const rail = boardPowerPins.some((p) => p.pinId === "3V3") ? "3.3V" : "5V";
+      const boardPower = endpoints
+        .filter((e) => e.componentId === comp.id)
+        .map((e) => resolvePin(e))
+        .find((resolved) => resolved.board && resolved.pin?.modes.includes("power"));
+      if (!boardPower?.pin) continue;
+      const voltage = powerPinVoltage(board, boardPower.pin);
+      if (voltage === null) continue;
+      const rail = voltage <= 3.6 ? "3.3V" : "5V";
       for (const e of endpoints) {
         const r = resolvePin(e);
-        if (r.peripheral && r.perReq && r.perReq.type === "power") {
-          railLoads[rail] += r.peripheral.currentDrawMa;
-          if (rail === "3.3V" && r.peripheral.id === "sg90") {
-            diagnostics.push({
-              severity: "WARNING",
-              code: "SERVO_ON_3V3_RAIL",
-              message: "SG90 servo appears powered from a 3.3V rail.",
-              explanation: "Servos require ~5V and draw current spikes (hundreds of mA) during movement, risking brownout of 3.3V regulators.",
-              fix: "Power the servo from a stable 5V supply (not 3.3V regulator output) with common ground.",
-              componentIds: [comp.id, e.componentId],
-            });
-          }
-          if (rail === "3.3V" && r.peripheral.id === "relay_5v_module") {
-            diagnostics.push({
-              severity: "WARNING",
-              code: "RELAY_POWERED_FROM_3V3",
-              message: "5V relay module appears powered from a 3.3V rail.",
-              explanation: "5V relay modules may not energize reliably at 3.3V and can overload the regulator.",
-              fix: "Power the relay module from a 5V supply capable of the coil current with proper drive circuitry.",
-              componentIds: [comp.id, e.componentId],
-            });
-          }
-          if (r.peripheral.id === "ws2812b_8") {
-            diagnostics.push({
-              severity: "WARNING",
-              code: "NEOPIXEL_POWER_BUDGET",
-              message: "WS2812B NeoPixel strip (8 LEDs, up to 480mA) may overload USB/regulator power rails.",
-              explanation: "Full-white draw can reach ~480mA for 8 LEDs, exceeding many onboard regulator/USB budgets and causing brownouts.",
-              fix: "Use a dedicated 5V supply sized for peak current with bulk capacitance and common ground.",
-              componentIds: [comp.id, e.componentId],
-            });
-          }
+        if (!r.peripheral || r.perReq?.type !== "power") continue;
+        const loadKey = `${rail}:${e.componentId}`;
+        if (counted.has(loadKey)) continue;
+        counted.add(loadKey);
+        railLoads[rail] += r.peripheral.currentDrawMa;
+        if (r.peripheral.id === "ws2812b_8") {
+          diagnostics.push({
+            severity: "WARNING",
+            code: "NEOPIXEL_POWER_BUDGET",
+            message: "WS2812B NeoPixel strip (8 LEDs, up to 480mA) may overload USB/regulator power rails.",
+            explanation: "Full-white draw can reach ~480mA for 8 LEDs, exceeding many onboard regulator/USB budgets and causing brownouts.",
+            fix: "Use a dedicated 5V supply sized for peak current with bulk capacitance and common ground.",
+            componentIds: [comp.id, e.componentId],
+          });
         }
       }
     }

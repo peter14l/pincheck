@@ -1,5 +1,16 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  getBoard,
+  lintCircuit,
+  parseCircuitState,
+  scoreDiagnostics,
+} from "@/lib/hardwareEngine";
+import {
+  validateCircuitState,
+  validateDescription,
+  validateTitle,
+} from "@/lib/circuitInput";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -8,12 +19,18 @@ export async function GET(_request: Request, context: Context) {
   try {
     const circuit = await prisma.circuit.findUnique({ where: { id } });
     if (!circuit) {
-      return Response.json(
-        { error: `Circuit "${id}" not found` },
-        { status: 404 },
-      );
+      return Response.json({ error: `Circuit "${id}" not found` }, { status: 404 });
     }
-    return Response.json(circuit);
+
+    const state = parseCircuitState(circuit.stateJson);
+    const diagnostics = state ? lintCircuit(state) : [];
+    return Response.json({
+      ...circuit,
+      boardName: getBoard(circuit.boardId)?.name ?? circuit.boardId,
+      stateJson: state ? JSON.stringify(state) : circuit.stateJson,
+      healthScore: state ? scoreDiagnostics(diagnostics) : 0,
+      valid: Boolean(state),
+    });
   } catch (error) {
     console.error(`GET /api/circuits/${id} failed:`, error);
     return Response.json({ error: "Failed to load circuit" }, { status: 500 });
@@ -31,10 +48,7 @@ export async function PUT(request: Request, context: Context) {
   }
 
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return Response.json(
-      { error: "Request body must be a JSON object" },
-      { status: 400 },
-    );
+    return Response.json({ error: "Request body must be a JSON object" }, { status: 400 });
   }
 
   const input = body as Record<string, unknown>;
@@ -47,81 +61,54 @@ export async function PUT(request: Request, context: Context) {
   } = {};
 
   if ("title" in input) {
-    if (typeof input.title !== "string" || input.title.trim().length === 0) {
+    const title = validateTitle(input.title);
+    if (!title) {
       return Response.json(
-        { error: "`title` must be a non-empty string" },
+        { error: "`title` must be a non-empty string of at most 120 characters" },
         { status: 400 },
       );
     }
-    data.title = input.title.trim();
+    data.title = title;
   }
+
   if ("description" in input) {
-    if (input.description !== null && typeof input.description !== "string") {
+    const description = validateDescription(input.description);
+    if (description === undefined) {
       return Response.json(
         { error: "`description` must be a string or null" },
         { status: 400 },
       );
     }
-    data.description = input.description as string | null;
+    data.description = description;
   }
-  if ("boardId" in input) {
-    if (typeof input.boardId !== "string" || input.boardId.trim().length === 0) {
-      return Response.json(
-        { error: "`boardId` must be a non-empty string" },
-        { status: 400 },
-      );
-    }
-    data.boardId = input.boardId.trim();
+
+  if ("boardId" in input && !("stateJson" in input)) {
+    return Response.json(
+      { error: "`boardId` is derived from `stateJson`; update them together" },
+      { status: 400 },
+    );
   }
+
   if ("stateJson" in input) {
-    if (
-      typeof input.stateJson !== "string" ||
-      input.stateJson.trim().length === 0
-    ) {
-      return Response.json(
-        { error: "`stateJson` must be a non-empty string" },
-        { status: 400 },
-      );
+    const validated = validateCircuitState(input.stateJson, input.boardId);
+    if (!validated.ok) {
+      return Response.json({ error: validated.error }, { status: 400 });
     }
-    try {
-      JSON.parse(input.stateJson);
-    } catch {
-      return Response.json(
-        { error: "`stateJson` must be a valid JSON string" },
-        { status: 400 },
-      );
-    }
-    data.stateJson = input.stateJson;
-  }
-  if ("healthScore" in input) {
-    if (typeof input.healthScore !== "number" || !Number.isFinite(input.healthScore)) {
-      return Response.json(
-        { error: "`healthScore` must be a number" },
-        { status: 400 },
-      );
-    }
-    data.healthScore = input.healthScore;
+    data.stateJson = validated.value.stateJson;
+    data.boardId = validated.value.boardId;
+    data.healthScore = validated.value.healthScore;
   }
 
   if (Object.keys(data).length === 0) {
-    return Response.json(
-      { error: "No updatable fields provided" },
-      { status: 400 },
-    );
+    return Response.json({ error: "No updatable fields provided" }, { status: 400 });
   }
 
   try {
     const circuit = await prisma.circuit.update({ where: { id }, data });
     return Response.json(circuit);
   } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2025"
-    ) {
-      return Response.json(
-        { error: `Circuit "${id}" not found` },
-        { status: 404 },
-      );
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      return Response.json({ error: `Circuit "${id}" not found` }, { status: 404 });
     }
     console.error(`PUT /api/circuits/${id} failed:`, error);
     return Response.json({ error: "Failed to update circuit" }, { status: 500 });
@@ -134,14 +121,8 @@ export async function DELETE(_request: Request, context: Context) {
     await prisma.circuit.delete({ where: { id } });
     return new Response(null, { status: 204 });
   } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2025"
-    ) {
-      return Response.json(
-        { error: `Circuit "${id}" not found` },
-        { status: 404 },
-      );
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      return Response.json({ error: `Circuit "${id}" not found` }, { status: 404 });
     }
     console.error(`DELETE /api/circuits/${id} failed:`, error);
     return Response.json({ error: "Failed to delete circuit" }, { status: 500 });

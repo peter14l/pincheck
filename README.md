@@ -1,102 +1,142 @@
 # PinCheck — Pre-Flight Hardware Linter
 
-**Catch circuit wiring mistakes before you build — like a spell-checker for your hardware projects.**
+**Catch wiring mistakes before you solder.** PinCheck turns a plain-English project description into a verified pinout, checks the result against a board-aware rule engine, lets you inject faults, and generates firmware that matches the wiring you see.
+
+![PinCheck home page](./pincheck-home.png)
 
 ---
 
-## What PinCheck Does
+## What it does
 
-PinCheck helps you design working circuits without the guesswork. Type what you want to build ("connect an OLED display and ultrasonic sensor to my ESP32"), and PinCheck gives you a verified wiring diagram, safety checks, and ready-to-run code. Think of it as a friendly co-pilot that catches mistakes before you solder a single wire.
+1. **Describe the circuit** — for example `ESP32 weather station with OLED and BME280`.
+2. **PinCheck selects a board and peripherals**, assigns pins with real capability checks, and draws an interactive SVG schematic.
+3. **The linter explains every problem** it finds: wrong voltage domains, unsafe strapping pins, flash pins, input-only pins used as outputs, UART conflicts, power-rail mismatches, missing grounds, I2C address collisions, current-budget overruns, and injected faults.
+4. **Auto-fix** deterministically reroutes unsafe signals, chooses the correct supply rail, removes bad GPIO12 pull-ups, and connects missing required pins.
+5. **Firmware** is generated in C++ (Arduino/PlatformIO) or MicroPython from the actual wiring.
+6. **Save, share, fork, and browse** circuits in the gallery.
 
----
-
-## Key Features
-
-| Feature | What It Means for You |
-|---------|----------------------|
-| **Prompt-to-Circuit** | Describe your project in plain English, get a complete wiring diagram instantly |
-| **Interactive Schematic** | Drag and drop components on a visual canvas — no schematic reading skills needed |
-| **Fault Injection** | Simulate what happens when a wire comes loose or a sensor fails — safely, on screen |
-| **Auto-Generated Firmware** | Copy-paste C++ (Arduino) or MicroPython code that works with your exact wiring |
-| **Share & Save** | Save your circuits, share links with teammates, pick up where you left off |
-| **Safety Checks** | Automatic warnings for voltage mismatches, pin collisions, and current budget overflows |
+AI is optional. When `OPENAI_API_KEY` or `GEMINI_API_KEY` is set, the server asks the model to interpret the prompt into a board + peripheral plan. Pin assignment itself always runs through the deterministic hardware engine, so the model cannot invent pins. Without a key, a local keyword parser is used.
 
 ---
 
-## Supported Hardware
+## Supported hardware
 
-**Boards:**
-- ESP32 (all popular variants)
-- Arduino Uno
-- Raspberry Pi Pico
+| Boards | Peripherals |
+| --- | --- |
+| ESP32 DevKit V1 (30-pin) | SSD1306 OLED (I2C) |
+| Arduino Uno R3 | BME280 (I2C) |
+| Raspberry Pi Pico (RP2040) | MPU6050 (I2C) |
+| | DHT22 |
+| | HC-SR04 ultrasonic |
+| | SG90 servo |
+| | 5V relay module |
+| | WS2812B 8-LED strip |
 
-**Components (growing library):**
-- OLED displays (SSD1306, SH1106)
-- Ultrasonic distance sensors (HC-SR04)
-- Servo motors (standard & continuous rotation)
-- LEDs, buttons, potentiometers
-- Temperature & humidity sensors (DHT11/22)
-- And more added regularly!
-
----
-
-## How to Use It (3 Simple Steps)
-
-1. **Describe** — Type what you're building: *"ESP32 with OLED and ultrasonic sensor"*
-2. **Review** — PinCheck shows the wiring diagram, highlights any issues, and suggests fixes
-3. **Build** — Copy the generated code, wire it up, and upload — done!
+The rule engine models logic voltage, 5V tolerance, input-only pins, strapping pins, flash-connected pins, ADC2/WiFi conflicts, default UART pins, and per-rail current budgets.
 
 ---
 
-## Who It's For
+## Stack
 
-- **Students** learning electronics — get unstuck faster, learn by doing
-- **Educators** — create verified lab circuits in minutes, not hours
-- **Hobbyists & makers** — prototype confidently, avoid fried components
-- **Hackathon teams** — go from idea to working hardware in record time
-
----
-
-## Tech Stack (Brief & Non-Technical)
-
-PinCheck runs entirely in your browser as a web app. Your circuits are saved locally in a lightweight database on your machine — no cloud accounts, no internet required after the first load. Built with modern web technologies for a smooth, responsive experience.
+- **Next.js 16.4.6** (App Router, React 19, Turbopack, Cache Components)
+- **TypeScript**
+- **Tailwind CSS 4**
+- **Prisma 7** with the `better-sqlite3` adapter and SQLite
+- **Vitest** for unit tests, **Playwright** for browser smoke tests
 
 ---
 
-## Embarko Student Challenge 2026
-
-PinCheck was built for the **Embarko Student Challenge 2026** — a showcase of student innovation in embedded systems and developer tools. We're proud to represent the next generation of hardware hackers making electronics more accessible for everyone.
-
----
-
-## Getting Started
+## Getting started
 
 ```bash
-# 1. Clone the project
-git clone <your-repo-url>
-cd pincheck
-
-# 2. Install dependencies (one-time)
 npm install
-
-# 3. Start the app
+cp .env.example .env        # Windows: copy .env.example .env
+npm run db:migrate
+npm run db:seed
 npm run dev
 ```
 
-Then open **http://localhost:3000** in your browser. That's it — start describing circuits!
+Open <http://localhost:3000>.
+
+The runtime database is `dev.db` in the project root (see `.env.example`). `npm run db:seed` is idempotent for the three demo presets and removes rows left behind by incompatible older schemas.
+
+### Environment variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | SQLite URL, defaults to `file:./dev.db` |
+| `OPENAI_API_KEY` | no | Enables AI prompt interpretation |
+| `OPENAI_MODEL` | no | Defaults to `gpt-4o-mini` |
+| `GEMINI_API_KEY` | no | Enables AI prompt interpretation when OpenAI is absent |
+
+Keys are read only in the server route `POST /api/generate`; they are never sent to the browser.
 
 ---
 
-## Contributing
+## Scripts
 
-Found a bug? Want a new component supported? Open an issue or pull request — we welcome ideas from students, educators, and makers alike.
+| Command | Action |
+| --- | --- |
+| `npm run dev` | Start the dev server |
+| `npm run build` | Production build |
+| `npm start` | Serve the production build |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm test` | Vitest unit tests |
+| `npm run test:e2e` | Playwright browser tests |
+| `npm run db:migrate` | Apply Prisma migrations |
+| `npm run db:seed` | Seed/refresh demo circuits |
+| `npm run db:reset` | Reset the SQLite database |
+
+---
+
+## How the engine works
+
+- **`src/lib/hardwareEngine.ts`** — board and peripheral definitions, pin capability rules, the linter, state normalization, health scoring, and the deterministic auto-fixer.
+- **`src/lib/circuitGenerator.ts`** — prompt analysis, board selection, shared I2C bus assignment, power-rail selection, preset circuits, and plan-to-circuit construction.
+- **`src/lib/firmwareGenerator.ts`** — C++/MicroPython output with real APIs (`machine.time_pulse_us`, `ESP32Servo`, correct 16-bit servo duty) plus safety warnings from the linter.
+- **`src/components/SchematicCanvas.tsx`** — click a board pin, then a peripheral pin, to wire them. Select a wire to delete it. Shared pages render read-only.
+- **`src/app/api/generate/route.ts`** — optional AI interpretation, always validated against the board/peripheral database.
+- **`src/app/api/circuits`** — saves normalized state and recomputes health server-side; client health scores are ignored.
+
+### Health score
+
+Each `CRITICAL` diagnostic subtracts 25 points, each `WARNING` subtracts 10, and each `INFO` subtracts 3, clamped to 0–100. The score is always recomputed from the current linter, including on share pages and in the gallery.
+
+---
+
+## API
+
+| Method | Route | Description |
+| --- | --- | --- |
+| `POST` | `/api/generate` | `{ prompt }` → circuit, diagnostics, health, `usedAI` |
+| `GET` | `/api/circuits` | List saved circuits with recomputed health |
+| `POST` | `/api/circuits` | Save `{ title, description?, boardId, stateJson }` |
+| `GET` | `/api/circuits/:id` | Load one circuit with recomputed health |
+| `PUT` | `/api/circuits/:id` | Update title/description/state |
+| `DELETE` | `/api/circuits/:id` | Delete a circuit |
+
+Invalid or legacy `stateJson` is rejected on write and normalized (never trusted) on read.
+
+---
+
+## Verification
+
+The project has been verified with:
+
+```bash
+npm run lint
+npm run build
+npm test
+npm run db:migrate
+npm run db:seed
+npm run test:e2e
+```
+
+The unit suite covers state normalization, linter rules, generator behavior, auto-fix changes, and firmware output.
 
 ---
 
 ## License
 
-MIT — free to use, modify, and share.
-
----
-
-*Built with ❤️ for the Embarko Student Challenge 2026*
+MIT — see [LICENSE](./LICENSE).

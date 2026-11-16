@@ -1,37 +1,26 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
 import CommandBar from "@/components/CommandBar";
 import SchematicCanvas from "@/components/SchematicCanvas";
 import { InspectorPanel } from "@/components/InspectorPanel";
 import FaultInjection from "@/components/FaultInjection";
+import SaveShareDialog from "@/components/SaveShareDialog";
 import {
   BOARDS,
   PERIPHERALS,
+  autoFixCircuit,
+  derivePinStates,
   lintCircuit,
+  scoreDiagnostics,
+  type CircuitFault,
+  type CircuitFaultType,
   type CircuitState,
-  type Diagnostic,
   type Wire,
 } from "@/lib/hardwareEngine";
-import { type CircuitGenerationResult } from "@/lib/circuitGenerator";
-import { generateFirmware, type FirmwareLanguage } from "@/lib/firmwareGenerator";
 
 const DEFAULT_BOARD_ID = "esp32_devkit_v1";
-
-function clampHealth(score: number): number {
-  if (!Number.isFinite(score)) return 0;
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-function computeHealthScore(diagnostics: Diagnostic[]): number {
-  let score = 100;
-  for (const d of diagnostics) {
-    if (d.severity === "CRITICAL") score -= 25;
-    else if (d.severity === "WARNING") score -= 10;
-    else score -= 3;
-  }
-  return clampHealth(score);
-}
 
 function createEmptyCircuit(boardId: string): CircuitState {
   const board = BOARDS[boardId] ?? BOARDS[DEFAULT_BOARD_ID];
@@ -46,6 +35,50 @@ function createEmptyCircuit(boardId: string): CircuitState {
     ],
     wires: [],
     pinStates: [],
+    faults: [],
+  };
+}
+
+function nextFault(state: CircuitState, type: CircuitFaultType): CircuitFault {
+  const board = state.components.find((component) => component.kind === "board");
+  const boardRef = board ? BOARDS[board.refId] : undefined;
+  const boardPinIds = new Set(boardRef?.pins.map((pin) => pin.id) ?? []);
+  const signalWire = state.wires.find((wire) => {
+    const fromIsBoard = wire.from.componentId === board?.id && boardPinIds.has(wire.from.pinId);
+    const toIsBoard = wire.to.componentId === board?.id && boardPinIds.has(wire.to.pinId);
+    return fromIsBoard || toIsBoard;
+  });
+  const peripheralEnd = signalWire
+    ? signalWire.from.componentId === board?.id
+      ? signalWire.to
+      : signalWire.from
+    : undefined;
+  const inputPin = (state.pinStates ?? []).find(
+    (pinState) =>
+      Boolean(boardRef) &&
+      pinState.componentId === board?.id &&
+      boardPinIds.has(pinState.pinId) &&
+      pinState.direction !== "output",
+  );
+
+  return {
+    id: `fault_${Date.now()}_${type}`,
+    type,
+    ...(type === "brownout"
+      ? { rail: boardRef && boardRef.logicVoltage > 3.6 ? ("5V" as const) : ("3.3V" as const) }
+      : {}),
+    ...(type === "open" && peripheralEnd
+      ? { componentId: peripheralEnd.componentId, pinId: peripheralEnd.pinId }
+      : {}),
+    ...(type === "floating" && inputPin
+      ? { componentId: inputPin.componentId, pinId: inputPin.pinId }
+      : {}),
+    note:
+      type === "open"
+        ? "signal path severed at runtime"
+        : type === "floating"
+          ? "input left undriven"
+          : "supply rail sag under load",
   };
 }
 
@@ -60,103 +93,90 @@ export default function PinCheckApp({
   );
   const [showFaultInjection, setShowFaultInjection] = useState(false);
   const [lastExplanation, setLastExplanation] = useState<string>("");
+  const [notice, setNotice] = useState<string | null>(null);
 
   const diagnostics = useMemo(() => lintCircuit(circuitState), [circuitState]);
-  const healthScore = useMemo(
-    () => computeHealthScore(diagnostics),
-    [diagnostics],
-  );
+  const healthScore = useMemo(() => scoreDiagnostics(diagnostics), [diagnostics]);
 
   const handleGenerate = useCallback(
     (next: CircuitState, nextBoardId: string, explanation: string) => {
       setBoardId(nextBoardId);
       setCircuitState(next);
       setLastExplanation(explanation);
-      if (process.env.NODE_ENV !== "production") {
-        // Keep imports "live" for integration points referenced by the app wiring.
-        void (PERIPHERALS && typeof generateFirmware === "function");
-      }
+      setNotice(null);
     },
     [],
   );
 
   const handleWireChange = useCallback((wires: Wire[]) => {
-    setCircuitState((prev) => ({ ...prev, wires }));
+    setCircuitState((prev) => {
+      const next = { ...prev, wires };
+      return { ...next, pinStates: derivePinStates(next) };
+    });
+    setNotice(null);
   }, []);
 
   const handleAutoFix = useCallback(() => {
-    // Basic stub: log a candidate fix action; full rerouting requires generation context.
-    const critical = diagnostics.filter((d) => d.severity === "CRITICAL");
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[PinCheck] Auto-fix requested", {
-        boardId,
-        critical: critical.map((d) => d.code),
-        suggestion:
-          "Re-run generation or manually reassign conflicting pins to safe GPIOs.",
-      });
+    const result = autoFixCircuit(circuitState);
+    if (result.changes.length === 0) {
+      setNotice("No automatic fixes available. Review the remaining diagnostics manually.");
+      return;
     }
-    setLastExplanation(
-      (prev) =>
-        prev ||
-        "Auto-fix stub: review critical diagnostics and regenerate or reassign conflicting pins.",
+    setCircuitState(result.state);
+    setNotice(
+      `Auto-fix applied ${result.changes.length} change${result.changes.length === 1 ? "" : "s"}: ${result.changes
+        .map((change) => change.description)
+        .join("; ")}`,
     );
-  }, [boardId, diagnostics]);
+  }, [circuitState]);
 
-  const handleFirmwareGenerate = useCallback(
-    (language: FirmwareLanguage, code: string) => {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[PinCheck] Firmware generated", {
-          language,
-          bytes: code.length,
-        });
-      }
-      // Ensure firmware generator import is exercised in app wiring.
-      void generateFirmware(circuitState, boardId, language);
-    },
-    [boardId, circuitState],
-  );
+  const handleFaultInject = useCallback((type: CircuitFaultType) => {
+    setCircuitState((prev) => ({
+      ...prev,
+      faults: [...(prev.faults ?? []), nextFault(prev, type)],
+    }));
+    setShowFaultInjection(true);
+    setNotice(null);
+  }, []);
 
-  const handleFaultInject = useCallback((fault: string) => {
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[PinCheck] Fault injected", fault);
-    }
+  const handleClearFaults = useCallback(() => {
+    setCircuitState((prev) => ({ ...prev, faults: [] }));
+    setNotice("Injected faults cleared.");
   }, []);
 
   const circuitSummary = useMemo(() => {
     const peripheralCount = circuitState.components.filter(
-      (c) => c.kind === "peripheral",
+      (component) => component.kind === "peripheral",
     ).length;
+    const peripheralNames = circuitState.components
+      .filter((component) => component.kind === "peripheral")
+      .map((component) => PERIPHERALS[component.refId]?.name ?? component.refId);
     return {
       peripheralCount,
       wireCount: circuitState.wires.length,
+      faultCount: circuitState.faults?.length ?? 0,
+      title: peripheralNames.length > 0
+        ? `${BOARDS[boardId]?.name ?? boardId} + ${peripheralNames.join(", ")}`
+        : `${BOARDS[boardId]?.name ?? boardId} circuit`,
     };
-  }, [circuitState]);
-
-  void (initialCircuitCount as unknown);
+  }, [circuitState, boardId]);
 
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col">
       <CommandBar onGenerate={handleGenerate} />
 
-      <div className="flex items-center justify-between gap-3 px-6 py-3 border-b border-[#273042] bg-[#0B0F17]">
-        <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 border-b border-[#273042] bg-[#0B0F17]">
+        <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-slate-400">
           <span>
-            board:{" "}
-            <span className="text-slate-200">
-              {BOARDS[boardId]?.name ?? boardId}
-            </span>
+            board: <span className="text-slate-200">{BOARDS[boardId]?.name ?? boardId}</span>
           </span>
           <span className="text-slate-600">|</span>
           <span>
-            peripherals:{" "}
-            <span className="text-slate-200">
-              {circuitSummary.peripheralCount}
-            </span>
+            peripherals: <span className="text-slate-200">{circuitSummary.peripheralCount}</span>
           </span>
           <span className="text-slate-600">|</span>
           <span>
-            wires:{" "}
-            <span className="text-slate-200">{circuitSummary.wireCount}</span>
+            wires: <span className="text-slate-200">{circuitSummary.wireCount}</span>
           </span>
           <span className="text-slate-600">|</span>
           <span>
@@ -173,58 +193,100 @@ export default function PinCheckApp({
               {healthScore}
             </span>
           </span>
+          {typeof initialCircuitCount === "number" && (
+            <>
+              <span className="text-slate-600">|</span>
+              <span>
+                saved: <span className="text-slate-200">{initialCircuitCount}</span>
+              </span>
+            </>
+          )}
+          {circuitSummary.faultCount > 0 && (
+            <>
+              <span className="text-slate-600">|</span>
+              <span className="text-red-400">faults: {circuitSummary.faultCount}</span>
+            </>
+          )}
         </div>
-        <label className="inline-flex items-center gap-2 text-xs font-mono text-slate-300 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            className="accent-red-500"
-            checked={showFaultInjection}
-            onChange={(e) => setShowFaultInjection(e.target.checked)}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="inline-flex items-center gap-2 text-xs font-mono text-slate-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="accent-red-500"
+              checked={showFaultInjection}
+              onChange={(event) => setShowFaultInjection(event.target.checked)}
+            />
+            Fault injection
+          </label>
+          <Link
+            href="/gallery"
+            className="rounded-lg border border-[#273042] px-3 py-1.5 font-mono text-xs text-slate-300 transition-colors hover:border-emerald-400/50 hover:text-white"
+          >
+            Gallery
+          </Link>
+          <SaveShareDialog
+            boardId={boardId}
+            circuitState={circuitState}
+            healthScore={healthScore}
+            suggestedTitle={circuitSummary.title}
           />
-          Fault injection
-        </label>
+        </div>
       </div>
 
-      <div className="flex-1 min-h-0 flex">
-        <main className="flex-1 min-w-0 min-h-0 relative">
+      {notice && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-4 border-b border-emerald-400/20 bg-emerald-400/5 px-6 py-2 font-mono text-xs text-emerald-200"
+        >
+          <span>{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="shrink-0 text-emerald-400/70 hover:text-emerald-300"
+            aria-label="Dismiss message"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+        <main className="relative min-h-[520px] min-w-0 flex-1">
           <SchematicCanvas
             circuitState={circuitState}
             diagnostics={diagnostics}
             onWireChange={handleWireChange}
           />
           {showFaultInjection && (
-            <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-[420px] z-20">
+            <div className="absolute bottom-4 left-4 right-4 z-20 md:right-auto md:w-[420px]">
               <FaultInjection
                 circuitState={circuitState}
                 onFaultInject={handleFaultInject}
+                onClearFaults={handleClearFaults}
               />
             </div>
           )}
           {lastExplanation && (
-            <div className="absolute top-4 left-4 max-w-xl bg-[#111928]/90 border border-[#273042] rounded-lg p-3 text-xs text-slate-300 font-mono backdrop-blur">
-              <div className="text-[10px] uppercase tracking-wider text-emerald-400 mb-1">
+            <div className="absolute top-4 left-4 z-10 max-w-xl rounded-lg border border-[#273042] bg-[#111928]/90 p-3 font-mono text-xs text-slate-300 backdrop-blur">
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-emerald-400">
                 Rationale
               </div>
-              <pre className="whitespace-pre-wrap leading-relaxed">
-                {lastExplanation}
-              </pre>
+              <pre className="whitespace-pre-wrap leading-relaxed">{lastExplanation}</pre>
             </div>
           )}
         </main>
-        <aside className="w-[420px] max-w-full border-l border-[#273042] bg-[#0B0F17] min-h-0">
+        <aside className="min-h-0 w-full border-t border-[#273042] bg-[#0B0F17] lg:w-[420px] lg:border-l lg:border-t-0">
           <InspectorPanel
             circuitState={circuitState}
             diagnostics={diagnostics}
             healthScore={healthScore}
             boardId={boardId}
             onAutoFix={handleAutoFix}
-            onFirmwareGenerate={handleFirmwareGenerate}
+            onFirmwareGenerate={() => undefined}
           />
         </aside>
       </div>
     </div>
   );
 }
-
-// Type-only reference to keep CircuitGenerationResult import meaningful in this module.
-export type { CircuitGenerationResult };

@@ -1,99 +1,72 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaClient } from "@prisma/client";
+import { generateCircuitFromPrompt } from "../src/lib/circuitGenerator";
+import { BOARDS, parseCircuitState } from "../src/lib/hardwareEngine";
 
-const prisma = new PrismaClient()
+const adapter = new PrismaBetterSqlite3({
+  url: process.env.DATABASE_URL ?? "file:./dev.db",
+});
+const prisma = new PrismaClient({ adapter });
+
+const PRESET_PROMPTS = [
+  "ESP32 Weather Station with OLED & BME280",
+  "Arduino Obstacle Robot with HC-SR04 & Servo",
+  "Deliberate Buggy Circuit Demo",
+] as const;
 
 async function main() {
-  const circuits = [
-    {
-      title: 'ESP32 Weather Station with OLED & BME280',
-      description: 'Healthy ESP32 DevKit V1 weather station with SSD1306 OLED and BME280 sensor wired on safe pins (I2C on GPIO21/22).',
-      boardId: 'esp32-devkit-v1',
-      healthScore: 100,
-      stateJson: JSON.stringify({
-        board: { id: 'esp32-devkit-v1', name: 'ESP32 DevKit V1' },
-        components: [
-          { id: 'u1', type: 'board', ref: 'ESP32 DevKit V1' },
-          { id: 'u2', type: 'display', ref: 'SSD1306 OLED', interface: 'I2C', address: '0x3C' },
-          { id: 'u3', type: 'sensor', ref: 'BME280', interface: 'I2C', address: '0x76' }
-        ],
-        connections: [
-          { from: 'u1.3V3', to: 'u2.VCC', net: '3V3' },
-          { from: 'u1.GND', to: 'u2.GND', net: 'GND' },
-          { from: 'u1.GPIO21', to: 'u2.SDA', net: 'I2C_SDA' },
-          { from: 'u1.GPIO22', to: 'u2.SCL', net: 'I2C_SCL' },
-          { from: 'u1.3V3', to: 'u3.VCC', net: '3V3' },
-          { from: 'u1.GND', to: 'u3.GND', net: 'GND' },
-          { from: 'u1.GPIO21', to: 'u3.SDA', net: 'I2C_SDA' },
-          { from: 'u1.GPIO22', to: 'u3.SCL', net: 'I2C_SCL' }
-        ],
-        diagnostics: []
-      })
-    },
-    {
-      title: 'Arduino Obstacle Robot with HC-SR04 & Servo',
-      description: 'Arduino Uno R3 robot with HC-SR04 ultrasonic sensor and SG90 servo for obstacle avoidance.',
-      boardId: 'arduino-uno-r3',
-      healthScore: 98,
-      stateJson: JSON.stringify({
-        board: { id: 'arduino-uno-r3', name: 'Arduino Uno R3' },
-        components: [
-          { id: 'u1', type: 'board', ref: 'Arduino Uno R3' },
-          { id: 'u2', type: 'sensor', ref: 'HC-SR04', interface: 'digital' },
-          { id: 'u3', type: 'actuator', ref: 'SG90 Servo', interface: 'PWM' }
-        ],
-        connections: [
-          { from: 'u1.5V', to: 'u2.VCC', net: '5V' },
-          { from: 'u1.GND', to: 'u2.GND', net: 'GND' },
-          { from: 'u1.D9', to: 'u2.TRIG', net: 'TRIG' },
-          { from: 'u1.D10', to: 'u2.ECHO', net: 'ECHO' },
-          { from: 'u1.5V', to: 'u3.VCC', net: '5V' },
-          { from: 'u1.GND', to: 'u3.GND', net: 'GND' },
-          { from: 'u1.D6', to: 'u3.SIGNAL', net: 'SERVO_PWM' }
-        ],
-        diagnostics: []
-      })
-    },
-    {
-      title: 'Deliberate Buggy Circuit Demo: ESP32 Strapping Trap',
-      description: 'ESP32 circuit with GPIO12 pulled HIGH causing flash voltage selection boot failure (strapping pin trap).',
-      boardId: 'esp32-devkit-v1',
-      healthScore: 25,
-      stateJson: JSON.stringify({
-        board: { id: 'esp32-devkit-v1', name: 'ESP32 DevKit V1' },
-        components: [
-          { id: 'u1', type: 'board', ref: 'ESP32 DevKit V1' },
-          { id: 'u2', type: 'sensor', ref: 'Generic Digital Sensor' }
-        ],
-        connections: [
-          { from: 'u1.3V3', to: 'u2.VCC', net: '3V3' },
-          { from: 'u1.GND', to: 'u2.GND', net: 'GND' },
-          { from: 'u1.GPIO12', to: 'u2.OUT', net: 'SENSOR_OUT' },
-          { from: 'u1.GPIO12', to: 'u1.3V3', net: 'PULLUP_HIGH', note: 'External pull-up holds GPIO12 HIGH at boot' }
-        ],
-        diagnostics: [
-          {
-            severity: 'CRITICAL',
-            code: 'ESP32_STRAPPING_GPIO12_HIGH',
-            message: 'GPIO12 is a strapping pin; pulling it HIGH at boot selects 1.8V flash voltage and can prevent boot on 3.3V flash modules.',
-            pins: ['GPIO12'],
-            recommendation: 'Move signal off GPIO12 or ensure it is LOW at boot; use GPIO13/14/27 etc. for general IO.'
-          }
-        ]
-      })
-    }
-  ]
+  const existing = await prisma.circuit.findMany({
+    select: { id: true, title: true, boardId: true, stateJson: true },
+  });
 
-  await prisma.circuit.deleteMany()
-  await prisma.circuit.createMany({ data: circuits })
-  console.log('Seeded circuits:', circuits.length)
+  // Remove rows left behind by older schemas so every share link renders.
+  const staleIds = existing
+    .filter((circuit) => !BOARDS[circuit.boardId] || !parseCircuitState(circuit.stateJson))
+    .map((circuit) => circuit.id);
+  if (staleIds.length > 0) {
+    await prisma.circuit.deleteMany({ where: { id: { in: staleIds } } });
+    console.log(`Removed ${staleIds.length} stale circuit(s).`);
+  }
+
+  for (const prompt of PRESET_PROMPTS) {
+    const result = await generateCircuitFromPrompt(prompt);
+    const stateJson = JSON.stringify(result.circuitState);
+    const matching = existing.find(
+      (circuit) => circuit.title === prompt && !staleIds.includes(circuit.id),
+    );
+
+    if (matching) {
+      await prisma.circuit.update({
+        where: { id: matching.id },
+        data: {
+          boardId: result.boardId,
+          stateJson,
+          healthScore: result.healthScore,
+          description: result.explanation,
+        },
+      });
+      console.log(`Updated "${prompt}" (health ${result.healthScore}).`);
+    } else {
+      await prisma.circuit.create({
+        data: {
+          title: prompt,
+          description: result.explanation,
+          boardId: result.boardId,
+          stateJson,
+          healthScore: result.healthScore,
+        },
+      });
+      console.log(`Created "${prompt}" (health ${result.healthScore}).`);
+    }
+  }
 }
 
 main()
   .then(async () => {
-    await prisma.$disconnect()
+    await prisma.$disconnect();
   })
-  .catch(async (e) => {
-    console.error(e)
-    await prisma.$disconnect()
-    process.exit(1)
-  })
+  .catch(async (error) => {
+    console.error(error);
+    await prisma.$disconnect();
+    process.exit(1);
+  });

@@ -7,6 +7,7 @@ import {
   Pin,
   getBoard,
   getPeripheral,
+  lintCircuit,
 } from "./hardwareEngine";
 
 export type FirmwareLanguage = "cpp" | "micropython";
@@ -311,7 +312,9 @@ function generateCpp(
 
   out.push("#include <Arduino.h>");
   if (hasI2c) out.push("#include <Wire.h>");
-  if (has("sg90")) out.push("#include <Servo.h>");
+  if (has("sg90")) {
+    out.push(board.id === "esp32_devkit_v1" ? "#include <ESP32Servo.h>" : "#include <Servo.h>");
+  }
   if (has("ssd1306")) {
     out.push("#include <Adafruit_GFX.h>");
     out.push("#include <Adafruit_SSD1306.h>");
@@ -334,7 +337,10 @@ function generateCpp(
     out.push("");
   }
 
-  if (servoUsage) out.push(`Servo ${servoUsage.pyVar};`);
+  if (servoUsage) {
+    const servoType = board.id === "esp32_devkit_v1" ? "ESP32Servo" : "Servo";
+    out.push(`${servoType} ${servoUsage.pyVar};`);
+  }
   if (dhtUsage) out.push(`DHT ${dhtUsage.pyVar}(${dhtUsage.macro}, DHT22);`);
   if (has("ssd1306")) out.push("Adafruit_SSD1306 display(128, 64, &Wire, -1);");
   if (has("bme280")) out.push("Adafruit_BME280 bme;");
@@ -416,7 +422,13 @@ function generateCpp(
     out.push("  strip.begin();");
     out.push("  strip.show();");
   }
-  if (servoUsage) out.push(`  ${servoUsage.pyVar}.attach(${servoUsage.macro});`);
+  if (servoUsage) {
+    out.push(
+      board.id === "esp32_devkit_v1"
+        ? `  ${servoUsage.pyVar}.attach(${servoUsage.macro}, 500, 2500);`
+        : `  ${servoUsage.pyVar}.attach(${servoUsage.macro});`,
+    );
+  }
   out.push("}");
   out.push("");
 
@@ -468,6 +480,23 @@ function generateCpp(
   return out.join("\n");
 }
 
+function micropythonI2cBus(
+  board: Board,
+  sda: PinUsage,
+  scl: PinUsage,
+): { id: number; software: boolean } {
+  if (board.id === "rpi_pico") {
+    const match = /I2C(\d)/i.exec(sda.boardPin.label) ?? /I2C(\d)/i.exec(scl.boardPin.label);
+    return { id: match ? Number(match[1]) : 0, software: false };
+  }
+  if (board.id === "esp32_devkit_v1") {
+    return { id: 0, software: false };
+  }
+  // ATmega328P boards do not run official MicroPython; use a bit-banged bus
+  // if the user is running a port that exposes SoftI2C.
+  return { id: 0, software: true };
+}
+
 function generateMicroPython(
   board: Board,
   usages: PinUsage[],
@@ -514,22 +543,28 @@ function generateMicroPython(
   out.push("# ============================================================");
   out.push("");
 
+  const i2cBus =
+    sdaUsage && sclUsage ? micropythonI2cBus(board, sdaUsage, sclUsage) : null;
+
   out.push("import time");
-  out.push("from machine import Pin, I2C, PWM");
+  out.push(
+    `from machine import Pin, I2C, PWM${i2cBus?.software ? ", SoftI2C" : ""}`,
+  );
   if (usages.some((u) => u.perPinType === "analog")) {
     out.push("from machine import ADC");
   }
-  if (has("hcsr04")) out.push("from machine import time_pins_us");
+  if (has("hcsr04")) out.push("import machine");
   if (has("dht22")) out.push("import dht");
   if (has("ssd1306")) out.push("import ssd1306");
   if (has("ws2812b_8")) out.push("import neopixel");
   if (has("bme280")) out.push("import bme280");
   out.push("");
 
-  if (sdaUsage && sclUsage) {
+  if (sdaUsage && sclUsage && i2cBus) {
     out.push("# --- I2C bus ---");
+    const driver = i2cBus.software ? "SoftI2C" : "I2C";
     out.push(
-      `i2c = I2C(0, scl=Pin(${sclUsage.value}), sda=Pin(${sdaUsage.value}))`,
+      `i2c = ${driver}(${i2cBus.id}, scl=Pin(${sclUsage.value}), sda=Pin(${sdaUsage.value}), freq=400000)`,
     );
     out.push("");
   }
@@ -601,7 +636,7 @@ function generateMicroPython(
     out.push("    trig.value(1)");
     out.push("    time.sleep_us(10)");
     out.push("    trig.value(0)");
-    out.push("    duration = time_pins_us(echo, 1, 30000)");
+    out.push("    duration = machine.time_pulse_us(echo, 1, 30000)");
     out.push("    if duration < 0:");
     out.push("        return -1.0");
     out.push("    return duration / 58.0");
@@ -650,7 +685,7 @@ function generateMicroPython(
     out.push(`        ${relayUsage.pyVar}.value(1)  # energize relay`);
   }
   if (servoUsage) {
-    out.push(`        ${servoUsage.pyVar}.duty(26)  # ~90 deg at 50 Hz`);
+    out.push(`        ${servoUsage.pyVar}.duty_u16(4915)  # ~1.5 ms pulse = 90 degrees`);
   }
   out.push("        time.sleep(0.2)");
   out.push("");
@@ -719,7 +754,28 @@ export function generateFirmware(
     peripherals.push(peripheral);
   }
 
-  return language === "micropython"
-    ? generateMicroPython(board, usages, peripherals)
-    : generateCpp(board, usages, peripherals);
+  const code =
+    language === "micropython"
+      ? generateMicroPython(board, usages, peripherals)
+      : generateCpp(board, usages, peripherals);
+
+  const warnings = lintCircuit(circuitState).filter(
+    (diagnostic) => diagnostic.severity !== "INFO",
+  );
+  if (warnings.length === 0) return code;
+
+  const comment = language === "micropython" ? "#" : "//";
+  const header = [
+    `${comment} ============================================================`,
+    `${comment}  PINCHECK SAFETY WARNINGS`,
+    `${comment}  Fix these before flashing; generated code does not add`,
+    `${comment}  level shifters or external power supplies for you.`,
+    `${comment} ============================================================`,
+    ...warnings.map(
+      (warning) => `${comment}  [${warning.severity}] ${warning.message}`,
+    ),
+    "",
+  ].join("\n");
+
+  return `${header}\n${code}`;
 }

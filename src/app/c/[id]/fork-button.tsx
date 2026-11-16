@@ -8,16 +8,9 @@ interface ForkButtonProps {
   description: string | null;
   boardId: string;
   stateJson: string;
-  healthScore: number;
 }
 
-export function ForkButton({
-  title,
-  description,
-  boardId,
-  stateJson,
-  healthScore,
-}: ForkButtonProps) {
+export function ForkButton({ title, description, boardId, stateJson }: ForkButtonProps) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +27,6 @@ export function ForkButton({
           description,
           boardId,
           stateJson,
-          healthScore,
         }),
       });
       if (!response.ok) {
