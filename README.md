@@ -2,7 +2,7 @@
 
 **Catch wiring mistakes before you solder.** PinCheck turns a plain-English project description into a verified pinout, checks the result against a board-aware rule engine, lets you inject faults, and generates firmware that matches the wiring you see.
 
-![PinCheck home page](./pincheck-home.png)
+![PinCheck home page](./docs/screenshots/home.png)
 
 ---
 
