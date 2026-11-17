@@ -81,19 +81,21 @@ Keys are read only in the server route `POST /api/generate`; they are never sent
 | `npm run build` | Production build |
 | `npm start` | Serve the production build |
 | `npm run lint` | ESLint |
-| `npm run typecheck` | `tsc --noEmit` |
+| `npm run typecheck` | `tsc --noEmit` (requires `npm run prisma:generate` + `npx next typegen` first) |
+| `npm run prisma:generate` | Generate the TypeScript Prisma client |
 | `npm test` | Vitest unit tests |
 | `npm run test:e2e` | Playwright browser tests |
 | `npm run db:migrate` | Apply Prisma migrations |
 | `npm run db:seed` | Seed/refresh demo circuits |
+| `npm run db:test:prepare` | Reset and seed the isolated `test.db` used by Playwright |
 | `npm run db:reset` | Reset the SQLite database |
 
 ---
 
 ## How the engine works
 
-- **`src/lib/hardwareEngine.ts`** — board and peripheral definitions, pin capability rules, the linter, state normalization, health scoring, and the deterministic auto-fixer.
-- **`src/lib/circuitGenerator.ts`** — prompt analysis, board selection, shared I2C bus assignment, power-rail selection, preset circuits, and plan-to-circuit construction.
+- **`src/lib/hardware/`** — board and peripheral definitions, pin capability rules, the linter, state normalization, health scoring, and the deterministic auto-fixer. Re-exported from `src/lib/hardwareEngine.ts` for backward compatibility.
+- **`src/lib/generator/`** — prompt analysis, board selection, shared I2C bus assignment, power-rail selection, preset circuits, and plan-to-circuit construction. Re-exported from `src/lib/circuitGenerator.ts` for backward compatibility.
 - **`src/lib/firmwareGenerator.ts`** — C++/MicroPython output with real APIs (`machine.time_pulse_us`, `ESP32Servo`, correct 16-bit servo duty) plus safety warnings from the linter.
 - **`src/components/SchematicCanvas.tsx`** — click a board pin, then a peripheral pin, to wire them. Select a wire to delete it. Shared pages render read-only.
 - **`src/app/api/generate/route.ts`** — optional AI interpretation, always validated against the board/peripheral database.
@@ -126,14 +128,18 @@ The project has been verified with:
 
 ```bash
 npm run lint
-npm run build
+npm run prisma:generate
+npx next typegen
+npm run typecheck
 npm test
-npm run db:migrate
-npm run db:seed
+npm run db:test:prepare
+npm run build
 npm run test:e2e
 ```
 
-The unit suite covers state normalization, linter rules, generator behavior, auto-fix changes, and firmware output.
+The unit suite covers state normalization, linter rules, generator behavior, auto-fix changes, and firmware output. The API routes have direct vitest tests (validation, 413s, 404s, health recomputation) in addition to the Playwright E2E suite.
+
+> `npm run typecheck` runs `tsc --noEmit`, which needs the generated Prisma client and Next.js route types. Run `npm run prisma:generate` and `npx next typegen` first (the CI workflow does this automatically).
 
 ---
 
