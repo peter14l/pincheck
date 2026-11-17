@@ -77,7 +77,7 @@ docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q pinch
 | `OPENAI_API_KEY` | unset | Optional. Enables AI prompt interpretation. Server-side only. |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Optional. Compose supplies the default explicitly. |
 | `GEMINI_API_KEY` | unset | Optional fallback when no OpenAI key is configured. |
-| `NEXT_PUBLIC_SITE_URL` | not used | The current code does not read it. If you add absolute canonical/OG URLs later, remember that `NEXT_PUBLIC_*` values are inlined at **build** time. |
+| `NEXT_PUBLIC_SITE_URL` | unset | Canonical origin for Open Graph share URLs (`/c/[id]`). Falls back to the request's `Host` header. Set it to `https://pincheck.example` for a real domain, and remember that `NEXT_PUBLIC_*` values are inlined at **build** time. |
 
 AI keys are injected at runtime by Compose. They are not copied into the image
 and they are never sent to the browser.

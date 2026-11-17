@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
@@ -13,6 +14,27 @@ import { ForkButton } from "./fork-button";
 import { SharedSchematicWrapper } from "./shared-schematic";
 
 type Circuit = NonNullable<Awaited<ReturnType<typeof prisma.circuit.findUnique>>>;
+
+/** Resolve the canonical origin for Open Graph URLs. */
+async function resolveSiteOrigin(): Promise<string> {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+
+  // Fall back to the request's own Host header so previews work even when
+  // NEXT_PUBLIC_SITE_URL is not set (e.g. local dev, ephemeral deploys).
+  try {
+    const h = await headers();
+    const host = h.get("host");
+    if (host) {
+      const proto = h.get("x-forwarded-proto") ?? "http";
+      return `${proto}://${host}`.replace(/\/+$/, "");
+    }
+  } catch {
+    // headers() outside a request context: fall through to the default.
+  }
+
+  return "https://pincheck.example";
+}
 
 export async function generateMetadata(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
@@ -28,6 +50,7 @@ export async function generateMetadata(props: { params: Promise<{ id: string }> 
     const description =
       circuit.description?.trim() ||
       `A ${boardName} circuit shared from PinCheck, with verified pinout and health score.`;
+    const url = `${await resolveSiteOrigin()}/c/${id}`;
     return {
       title: circuit.title,
       description,
@@ -35,6 +58,7 @@ export async function generateMetadata(props: { params: Promise<{ id: string }> 
         title: `${circuit.title} \u00B7 PinCheck`,
         description,
         type: "article",
+        url,
       },
       twitter: {
         card: "summary",

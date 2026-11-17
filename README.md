@@ -65,6 +65,7 @@ The runtime database is `dev.db` in the project root (see `.env.example`). `npm 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | yes | SQLite URL, defaults to `file:./dev.db` |
+| `NEXT_PUBLIC_SITE_URL` | no | Canonical origin for Open Graph share URLs; falls back to the request Host header |
 | `OPENAI_API_KEY` | no | Enables AI prompt interpretation |
 | `OPENAI_MODEL` | no | Defaults to `gpt-4o-mini` |
 | `GEMINI_API_KEY` | no | Enables AI prompt interpretation when OpenAI is absent |
