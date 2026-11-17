@@ -123,7 +123,10 @@ export async function PUT(request: Request, context: Context) {
     const circuit = await prisma.circuit.update({ where: { id }, data });
     return Response.json(circuit);
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
       return Response.json({ error: `Circuit "${id}" not found` }, { status: 404 });
     }
     console.error(`PUT /api/circuits/${id} failed:`, error);
@@ -145,7 +148,10 @@ export async function DELETE(request: Request, context: Context) {
     await prisma.circuit.delete({ where: { id } });
     return new Response(null, { status: 204 });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
       return Response.json({ error: `Circuit "${id}" not found` }, { status: 404 });
     }
     console.error(`DELETE /api/circuits/${id} failed:`, error);

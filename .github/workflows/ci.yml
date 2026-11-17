@@ -27,6 +27,12 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Generate Prisma Client
+        run: npm run prisma:generate
+
+      - name: Generate Next.js route types
+        run: npx next typegen
+
       - name: Lint
         run: npm run lint
 
