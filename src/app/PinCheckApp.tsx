@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CommandBar from "@/components/CommandBar";
 import SchematicCanvas from "@/components/SchematicCanvas";
 import { InspectorPanel } from "@/components/InspectorPanel";
 import FaultInjection from "@/components/FaultInjection";
 import SaveShareDialog from "@/components/SaveShareDialog";
+import UndoToast from "@/components/UndoToast";
 import {
   BOARDS,
   PERIPHERALS,
@@ -21,6 +22,35 @@ import {
 } from "@/lib/hardwareEngine";
 
 const DEFAULT_BOARD_ID = "esp32_devkit_v1";
+
+type UndoEntry = {
+  /** Monotonic id so a replacement restarts the auto-dismiss timer. */
+  key: number;
+  state: CircuitState;
+  /** Short action name for the accessible Undo label. */
+  label: string;
+  /** Human-readable message shown when there is no notice text. */
+  message: string;
+};
+
+/**
+ * Snapshot of everything a destructive edit can change. Arrays and nested
+ * wire endpoints are copied so later immutable updates cannot mutate the
+ * stored snapshot; pinStates are captured explicitly because they are
+ * derived during wire edits.
+ */
+function cloneCircuitState(state: CircuitState): CircuitState {
+  return {
+    components: state.components.map((component) => ({ ...component })),
+    wires: state.wires.map((wire) => ({
+      ...wire,
+      from: { ...wire.from },
+      to: { ...wire.to },
+    })),
+    pinStates: state.pinStates?.map((pinState) => ({ ...pinState })),
+    faults: state.faults?.map((fault) => ({ ...fault })),
+  };
+}
 
 function createEmptyCircuit(boardId: string): CircuitState {
   const board = BOARDS[boardId] ?? BOARDS[DEFAULT_BOARD_ID];
@@ -94,9 +124,24 @@ export default function PinCheckApp({
   const [showFaultInjection, setShowFaultInjection] = useState(false);
   const [lastExplanation, setLastExplanation] = useState<string>("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [undo, setUndo] = useState<UndoEntry | null>(null);
+  const undoKeyRef = useRef(0);
 
   const diagnostics = useMemo(() => lintCircuit(circuitState), [circuitState]);
   const healthScore = useMemo(() => scoreDiagnostics(diagnostics), [diagnostics]);
+
+  const pushUndo = useCallback(
+    (state: CircuitState, label: string, message: string) => {
+      undoKeyRef.current += 1;
+      setUndo({
+        key: undoKeyRef.current,
+        state: cloneCircuitState(state),
+        label,
+        message,
+      });
+    },
+    [],
+  );
 
   const handleGenerate = useCallback(
     (next: CircuitState, nextBoardId: string, explanation: string) => {
@@ -104,17 +149,22 @@ export default function PinCheckApp({
       setCircuitState(next);
       setLastExplanation(explanation);
       setNotice(null);
+      setUndo(null);
     },
     [],
   );
 
-  const handleWireChange = useCallback((wires: Wire[]) => {
-    setCircuitState((prev) => {
-      const next = { ...prev, wires };
-      return { ...next, pinStates: derivePinStates(next) };
-    });
-    setNotice(null);
-  }, []);
+  const handleWireChange = useCallback(
+    (wires: Wire[]) => {
+      // SchematicCanvas only reports completed mutations (one click per wire
+      // add, one per delete), so each call is already one undo step.
+      pushUndo(circuitState, "wiring change", "Wiring updated");
+      const next = { ...circuitState, wires };
+      setCircuitState({ ...next, pinStates: derivePinStates(next) });
+      setNotice(null);
+    },
+    [circuitState, pushUndo],
+  );
 
   const handleAutoFix = useCallback(() => {
     const result = autoFixCircuit(circuitState);
@@ -122,15 +172,28 @@ export default function PinCheckApp({
       setNotice("No automatic fixes available. Review the remaining diagnostics manually.");
       return;
     }
+    pushUndo(circuitState, "auto-fix", "Auto-fix applied");
     setCircuitState(result.state);
     setNotice(
       `Auto-fix applied ${result.changes.length} change${result.changes.length === 1 ? "" : "s"}: ${result.changes
         .map((change) => change.description)
         .join("; ")}`,
     );
-  }, [circuitState]);
+  }, [circuitState, pushUndo]);
+
+  const handleUndo = useCallback(() => {
+    if (!undo) return;
+    setCircuitState(cloneCircuitState(undo.state));
+    setUndo(null);
+    setNotice("Change undone");
+  }, [undo]);
+
+  const handleUndoExpire = useCallback(() => setUndo(null), []);
 
   const handleFaultInject = useCallback((type: CircuitFaultType) => {
+    // Fault edits are outside undo history, but snapshots include faults, so
+    // drop a pending snapshot rather than risk it silently reverting a fault.
+    setUndo(null);
     setCircuitState((prev) => ({
       ...prev,
       faults: [...(prev.faults ?? []), nextFault(prev, type)],
@@ -140,6 +203,8 @@ export default function PinCheckApp({
   }, []);
 
   const handleClearFaults = useCallback(() => {
+    // Same rationale as fault injection: keep undo from reverting fault edits.
+    setUndo(null);
     setCircuitState((prev) => ({ ...prev, faults: [] }));
     setNotice("Injected faults cleared.");
   }, []);
@@ -234,25 +299,37 @@ export default function PinCheckApp({
         </div>
       </div>
 
-      {notice && (
+      {(notice || undo) && (
         <div
           role="status"
           className="flex items-start justify-between gap-4 border-b border-emerald-400/20 bg-emerald-400/5 px-6 py-2 font-mono text-xs text-emerald-200"
         >
-          <span>{notice}</span>
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            className="shrink-0 text-emerald-400/70 hover:text-emerald-300"
-            aria-label="Dismiss message"
-          >
-            dismiss
-          </button>
+          <span className="min-w-0 flex-1">{notice ?? undo?.message}</span>
+          <div className="flex shrink-0 items-center gap-3">
+            {undo && (
+              <UndoToast
+                key={undo.key}
+                action={undo.label}
+                onUndo={handleUndo}
+                onExpire={handleUndoExpire}
+              />
+            )}
+            {notice && (
+              <button
+                type="button"
+                onClick={() => setNotice(null)}
+                className="shrink-0 text-emerald-400/70 hover:text-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B0F17]"
+                aria-label="Dismiss message"
+              >
+                dismiss
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-        <main className="relative min-h-[520px] min-w-0 flex-1">
+        <main id="main-content" className="relative min-h-[520px] min-w-0 flex-1">
           <SchematicCanvas
             circuitState={circuitState}
             diagnostics={diagnostics}

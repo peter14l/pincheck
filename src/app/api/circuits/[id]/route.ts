@@ -11,11 +11,25 @@ import {
   validateDescription,
   validateTitle,
 } from "@/lib/circuitInput";
+import { readJsonObjectBody } from "@/lib/http";
+import { checkRateLimit, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+
+const MAX_BODY_BYTES = 256 * 1024;
+const MAX_ID_LENGTH = 64;
+const RATE_LIMIT = { bucket: "circuits:item", limit: 30, windowMs: 60_000 };
 
 type Context = { params: Promise<{ id: string }> };
 
+/** Ids are database cuids; anything empty or oversized cannot exist. */
+function isValidCircuitId(id: string): boolean {
+  return id.length > 0 && id.length <= MAX_ID_LENGTH;
+}
+
 export async function GET(_request: Request, context: Context) {
   const { id } = await context.params;
+  if (!isValidCircuitId(id)) {
+    return Response.json({ error: "Circuit not found" }, { status: 404 });
+  }
   try {
     const circuit = await prisma.circuit.findUnique({ where: { id } });
     if (!circuit) {
@@ -38,20 +52,22 @@ export async function GET(_request: Request, context: Context) {
 }
 
 export async function PUT(request: Request, context: Context) {
+  const limit = checkRateLimit({ ...RATE_LIMIT, key: getClientIp(request) });
+  if (!limit.allowed) {
+    return rateLimitResponse(limit.retryAfterSeconds);
+  }
+
   const { id } = await context.params;
-
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  if (!isValidCircuitId(id)) {
+    return Response.json({ error: "Circuit not found" }, { status: 404 });
   }
 
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return Response.json({ error: "Request body must be a JSON object" }, { status: 400 });
+  const parsed = await readJsonObjectBody(request, MAX_BODY_BYTES);
+  if (!parsed.ok) {
+    return Response.json({ error: parsed.error }, { status: parsed.status });
   }
 
-  const input = body as Record<string, unknown>;
+  const input = parsed.value;
   const data: {
     title?: string;
     description?: string | null;
@@ -115,8 +131,16 @@ export async function PUT(request: Request, context: Context) {
   }
 }
 
-export async function DELETE(_request: Request, context: Context) {
+export async function DELETE(request: Request, context: Context) {
+  const limit = checkRateLimit({ ...RATE_LIMIT, key: getClientIp(request) });
+  if (!limit.allowed) {
+    return rateLimitResponse(limit.retryAfterSeconds);
+  }
+
   const { id } = await context.params;
+  if (!isValidCircuitId(id)) {
+    return Response.json({ error: "Circuit not found" }, { status: 404 });
+  }
   try {
     await prisma.circuit.delete({ where: { id } });
     return new Response(null, { status: 204 });

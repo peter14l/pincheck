@@ -7,7 +7,7 @@ const SharedSchematic = dynamic(
   () => import("@/components/SchematicCanvas").then((mod) => mod.default),
   {
     ssr: false,
-    loading: () => <p className="p-6 text-sm text-zinc-500">Loading schematic...</p>,
+    loading: () => <p className="p-6 text-sm text-zinc-400">Loading schematic...</p>,
   },
 );
 

@@ -1,0 +1,126 @@
+import type { Peripheral } from "./types";
+
+export const PERIPHERALS: Record<string, Peripheral> = {
+  ssd1306: {
+    id: "ssd1306",
+    name: "SSD1306 OLED (I2C)",
+    description: "128x64 I2C OLED display module (default address 0x3C).",
+    supplyVoltage: 3.3,
+    supplyVoltageMin: 3.3,
+    supplyVoltageMax: 5,
+    currentDrawMa: 20,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 3.3 },
+      { name: "GND", type: "gnd" },
+      { name: "SDA", type: "i2c-sda", i2cAddress: 0x3c },
+      { name: "SCL", type: "i2c-scl", i2cAddress: 0x3c },
+    ],
+  },
+  hcsr04: {
+    id: "hcsr04",
+    name: "HC-SR04 Ultrasonic Sensor",
+    description: "Ultrasonic distance sensor. VCC is 5V and ECHO outputs 5V logic.",
+    supplyVoltage: 5,
+    supplyVoltageMin: 5,
+    supplyVoltageMax: 5,
+    currentDrawMa: 15,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 5 },
+      { name: "GND", type: "gnd" },
+      { name: "TRIG", type: "digital-out", voltage: 5, notes: "Driven by MCU; 3.3V often accepted by module." },
+      { name: "ECHO", type: "digital-in", voltage: 5, notes: "Outputs 5V; requires level shifting to 3.3V MCU GPIO." },
+    ],
+  },
+  dht22: {
+    id: "dht22",
+    name: "DHT22 Temperature/Humidity Sensor",
+    description: "Single-wire digital sensor, 3.3V-5V supply. Requires 10kΩ pull-up on data line.",
+    supplyVoltage: 3.3,
+    supplyVoltageMin: 3.3,
+    supplyVoltageMax: 5,
+    currentDrawMa: 2.5,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 3.3 },
+      { name: "GND", type: "gnd" },
+      { name: "DATA", type: "digital-bidir", voltage: 3.3, notes: "Use 10kΩ pull-up resistor to VCC." },
+    ],
+    notes: "Recommend 10kΩ pull-up resistor on DATA line.",
+  },
+  relay_5v_module: {
+    id: "relay_5v_module",
+    name: "5V Relay Module",
+    description: "Single-channel relay module with driver; coil current drawn from supply rail.",
+    supplyVoltage: 5,
+    currentDrawMa: 70,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 5 },
+      { name: "GND", type: "gnd" },
+      { name: "IN", type: "digital-out", voltage: 5, notes: "Some modules expect 5V logic; 3.3V may be unreliable." },
+    ],
+  },
+  sg90: {
+    id: "sg90",
+    name: "SG90 Micro Servo",
+    description: "5V hobby servo with PWM control; current spikes during movement.",
+    supplyVoltage: 5,
+    supplyVoltageMin: 4.8,
+    supplyVoltageMax: 6,
+    currentDrawMa: 250,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 5 },
+      { name: "GND", type: "gnd" },
+      { name: "PWM", type: "pwm", voltage: 5, notes: "Control signal often 3.3V-tolerant, but power must be 5V." },
+    ],
+    notes: "Peak current spikes can brown out onboard regulators when powered from a 3.3V rail.",
+  },
+  mpu6050: {
+    id: "mpu6050",
+    name: "MPU6050 IMU (I2C)",
+    description: "6-axis accelerometer/gyro module (default address 0x68).",
+    supplyVoltage: 3.3,
+    supplyVoltageMin: 3.3,
+    supplyVoltageMax: 5,
+    currentDrawMa: 4,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 3.3 },
+      { name: "GND", type: "gnd" },
+      { name: "SDA", type: "i2c-sda", i2cAddress: 0x68 },
+      { name: "SCL", type: "i2c-scl", i2cAddress: 0x68 },
+    ],
+  },
+  bme280: {
+    id: "bme280",
+    name: "BME280 Sensor (I2C)",
+    description: "Temperature/humidity/pressure sensor (address 0x76 or 0x77).",
+    supplyVoltage: 3.3,
+    supplyVoltageMin: 3.3,
+    supplyVoltageMax: 3.6,
+    currentDrawMa: 1,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 3.3 },
+      { name: "GND", type: "gnd" },
+      { name: "SDA", type: "i2c-sda", i2cAddress: 0x76 },
+      { name: "SCL", type: "i2c-scl", i2cAddress: 0x76 },
+    ],
+    notes: "Some modules use address 0x77 depending on SDO wiring; modeled as 0x76 by default.",
+  },
+  ws2812b_8: {
+    id: "ws2812b_8",
+    name: "WS2812B NeoPixel Strip (8 LEDs)",
+    description: "Addressable RGB LEDs, 5V supply. Up to 60mA per LED at full white.",
+    supplyVoltage: 5,
+    supplyVoltageMin: 5,
+    supplyVoltageMax: 5,
+    currentDrawMa: 480,
+    pinRequirements: [
+      { name: "VCC", type: "power", voltage: 5 },
+      { name: "GND", type: "gnd" },
+      { name: "DIN", type: "digital-out", voltage: 5, notes: "Data line; 3.3V logic may work but 5V level shifting is recommended." },
+    ],
+    notes: "8 LEDs * 60mA = 480mA max. Avoid powering from weak USB/regulator rails without headroom.",
+  },
+};
+
+export function getPeripheral(id: string): Peripheral | undefined {
+  return PERIPHERALS[id];
+}

@@ -49,6 +49,12 @@ next-env.d.ts
 /dev.db
 *.db-journal
 
+# isolated e2e database (recreated by scripts/prepare-test-db.ts)
+/test.db
+/test.db-journal
+/test.db-shm
+/test.db-wal
+
 # prisma db
 prisma/*.db
 prisma/*.db-journal

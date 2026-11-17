@@ -14,6 +14,39 @@ import { SharedSchematicWrapper } from "./shared-schematic";
 
 type Circuit = NonNullable<Awaited<ReturnType<typeof prisma.circuit.findUnique>>>;
 
+export async function generateMetadata(props: { params: Promise<{ id: string }> }) {
+  const { id } = await props.params;
+  try {
+    const circuit = await prisma.circuit.findUnique({
+      where: { id },
+      select: { title: true, description: true, boardId: true },
+    });
+    if (!circuit) {
+      return { title: "Circuit not found" };
+    }
+    const boardName = getBoard(circuit.boardId)?.name ?? circuit.boardId;
+    const description =
+      circuit.description?.trim() ||
+      `A ${boardName} circuit shared from PinCheck, with verified pinout and health score.`;
+    return {
+      title: circuit.title,
+      description,
+      openGraph: {
+        title: `${circuit.title} \u00B7 PinCheck`,
+        description,
+        type: "article",
+      },
+      twitter: {
+        card: "summary",
+        title: `${circuit.title} \u00B7 PinCheck`,
+        description,
+      },
+    };
+  } catch {
+    return { title: "Shared circuit \u00B7 PinCheck" };
+  }
+}
+
 export default function Page(props: { params: Promise<{ id: string }> }) {
   return (
     <Suspense
@@ -39,9 +72,9 @@ function healthScoreClasses(healthScore: number): string {
 }
 
 const SEVERITY_CLASSES: Record<string, string> = {
-  CRITICAL: "text-red-600 dark:text-red-400",
-  WARNING: "text-amber-600 dark:text-amber-400",
-  INFO: "text-emerald-600 dark:text-emerald-400",
+  CRITICAL: "text-red-700 dark:text-red-400",
+  WARNING: "text-amber-700 dark:text-amber-400",
+  INFO: "text-emerald-700 dark:text-emerald-400",
 };
 
 async function CircuitContent(props: { params: Promise<{ id: string }> }) {
@@ -83,7 +116,7 @@ async function CircuitContent(props: { params: Promise<{ id: string }> }) {
   return (
     <main className="mx-auto w-full max-w-5xl px-6 py-12">
       <nav className="mb-6 flex items-center justify-between gap-4 text-sm">
-        <Link href="/" className="font-medium text-emerald-600 underline-offset-4 hover:underline dark:text-emerald-400">
+        <Link href="/" className="font-medium text-emerald-700 underline-offset-4 hover:underline dark:text-emerald-400">
           PinCheck
         </Link>
         <Link href="/gallery" className="text-zinc-500 underline-offset-4 hover:underline dark:text-zinc-400">

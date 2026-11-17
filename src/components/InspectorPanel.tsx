@@ -266,7 +266,7 @@ function TabBar({ active, onChange }: { active: TabId; onChange: (id: TabId) => 
             aria-controls={`inspector-panel-${tab.id}`}
             onClick={() => onChange(tab.id)}
             className={`relative flex-1 px-2 py-2.5 text-[11px] font-medium transition-colors ${
-              selected ? "text-emerald-300" : "text-zinc-500 hover:text-zinc-300"
+              selected ? "text-emerald-300" : "text-zinc-400 hover:text-zinc-300"
             }`}
           >
             {tab.label}
@@ -300,7 +300,7 @@ function HealthRing({ score }: { score: number }) {
           <span className="text-xl font-bold leading-none" style={{ color }}>
             {score}
           </span>
-          <span className="mt-0.5 text-[9px] uppercase tracking-wider text-zinc-500">
+          <span className="mt-0.5 text-[9px] uppercase tracking-wider text-zinc-400">
             / 100
           </span>
         </div>
@@ -354,11 +354,11 @@ function LintTab({
           type="button"
           onClick={() => onAutoFix?.()}
           disabled={!onAutoFix || fixable === 0}
-          className="mt-4 inline-flex w-full items-center justify-center rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-[#04110C] transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500"
+          className="mt-4 inline-flex w-full items-center justify-center rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-[#04110C] transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-400"
         >
           {fixable === 0 ? "No fixes needed" : `Auto-Fix Circuit (${fixable})`}
         </button>
-        <p className="mt-2 text-center text-[11px] text-zinc-500">
+        <p className="mt-2 text-center text-[11px] text-zinc-400">
           Reroutes conflicting pins to safe, constraint-aware alternatives.
         </p>
       </section>
@@ -381,7 +381,7 @@ function LintTab({
               </span>
             </div>
             {items.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-xs text-zinc-500">
+              <p className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-xs text-zinc-400">
                 No {meta.label.toLowerCase()} issues.
               </p>
             ) : (
@@ -406,7 +406,7 @@ function LintTab({
                           {d.code}
                         </span>
                         {labels.length > 0 && (
-                          <span className="truncate text-[10px] text-zinc-500">
+                          <span className="truncate text-[10px] text-zinc-400">
                             {labels.join(", ")}
                           </span>
                         )}
@@ -464,6 +464,19 @@ function FirmwareTab({
     }
   }
 
+  function handleDownload() {
+    const extension = language === "micropython" ? "py" : "cpp";
+    const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `pincheck-firmware.${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
   function handleGenerate() {
     onFirmwareGenerate?.(language, code);
   }
@@ -491,7 +504,7 @@ function FirmwareTab({
               >
                 {lang.label}
               </span>
-              <span className="block text-[10px] text-zinc-500">{lang.hint}</span>
+              <span className="block text-[10px] text-zinc-400">{lang.hint}</span>
             </button>
           );
         })}
@@ -511,6 +524,13 @@ function FirmwareTab({
           className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20"
         >
           {copied ? "Copied!" : "Copy code"}
+        </button>
+        <button
+          type="button"
+          onClick={handleDownload}
+          className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20"
+        >
+          Download
         </button>
       </div>
 
@@ -540,20 +560,20 @@ function MatrixTab({
           <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
             Current Draw Budget
           </h3>
-          <span className="text-[11px] text-zinc-500">
+          <span className="text-[11px] text-zinc-400">
             {data.boardName}{" \u00B7 "}{data.logicVoltage}V logic
             {data.logicVoltageTolerant5V ? " \u00B7 5V tolerant" : " \u00B7 3.3V only"}
           </span>
         </div>
 
         {data.rows.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-xs text-zinc-500">
+          <p className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-xs text-zinc-400">
             No peripherals wired yet.
           </p>
         ) : (
           <div className="overflow-hidden rounded-xl border border-white/10">
             <table className="w-full text-left text-xs">
-              <thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-500">
+              <thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-400">
                 <tr>
                   <th className="px-3 py-2 font-medium">Peripheral</th>
                   <th className="px-3 py-2 font-medium">Rail</th>
@@ -626,13 +646,13 @@ function MatrixTab({
           Pin Allocation Map
         </h3>
         {data.pins.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-xs text-zinc-500">
+          <p className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-xs text-zinc-400">
             No signal pins assigned.
           </p>
         ) : (
           <div className="overflow-hidden rounded-xl border border-white/10">
             <table className="w-full text-left text-xs">
-              <thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-500">
+              <thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-400">
                 <tr>
                   <th className="px-3 py-2 font-medium">Pin</th>
                   <th className="px-3 py-2 font-medium">Modes</th>
@@ -646,7 +666,7 @@ function MatrixTab({
                     <td className="px-3 py-2 font-mono text-zinc-200">
                       {pin.pinLabel}
                     </td>
-                    <td className="px-3 py-2 text-[11px] text-zinc-500">
+                    <td className="px-3 py-2 text-[11px] text-zinc-400">
                       {pin.modes}
                     </td>
                     <td className="px-3 py-2 text-zinc-300">{pin.target}</td>
@@ -702,7 +722,7 @@ export function InspectorPanel({
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold tracking-tight">Inspector</h2>
-          <p className="truncate text-[11px] text-zinc-500">{boardId}</p>
+          <p className="truncate text-[11px] text-zinc-400">{boardId}</p>
         </div>
         <div className="flex items-center gap-2">
           <StatusLed color={headerColor} pulse />

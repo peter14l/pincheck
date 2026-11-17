@@ -1,0 +1,50 @@
+# PinCheck self-hosting stack.
+#
+#   docker compose up -d --build
+#
+# The named volume keeps the SQLite database (and its WAL files) across
+# rebuilds and restarts. `docker compose down` keeps the volume;
+# `docker compose down -v` deletes it.
+
+services:
+  pincheck:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pincheck:local
+    ports:
+      - "3000:3000"
+    environment:
+      # Absolute file: URL on the persistent volume. Do not use file:./dev.db
+      # here: the container filesystem is replaced on every upgrade.
+      DATABASE_URL: file:/data/pincheck.db
+      NODE_ENV: production
+      # Optional AI interpretation. Export these in your shell or put them in a
+      # .env file next to this compose file (never commit that file).
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # The app reads OPENAI_MODEL with ??, so an explicit default avoids
+      # passing an empty model name when the variable is unset.
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - pincheck-data:/data
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Node's built-in fetch, so the runtime image needs no curl/wget.
+      # /api/circuits reads SQLite, so this check covers the database too.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/circuits', { signal: AbortSignal.timeout(4000) }).then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  pincheck-data:

@@ -1,0 +1,54 @@
+# Build context exclusions.
+#
+# Keep the build context small and make sure local databases, test artifacts
+# and secrets never end up in the image.
+
+# Version control
+.git
+.gitignore
+.github
+
+# Dependencies and build output
+node_modules
+.next
+out
+build
+*.tsbuildinfo
+
+# Local SQLite databases (Prisma migrations are kept in prisma/migrations)
+dev.db
+dev.db-*
+test.db
+test.db-*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Tests and reports
+coverage
+playwright-report
+test-results
+blob-report
+playwright/.cache
+screenshots
+*.trace.zip
+
+# Local environment files (Docker/Compose injects config at runtime)
+.env
+.env.*
+!.env.example
+
+# Editor / OS noise
+.DS_Store
+.idea
+.vscode
+.vscode-test
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.vercel
+Dockerfile
+docker-compose.yml
+docs

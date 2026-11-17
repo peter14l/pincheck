@@ -4,10 +4,25 @@ import {
   type CircuitGenerationResult,
 } from "@/lib/circuitGenerator";
 import { BOARDS, PERIPHERALS, getBoard, getPeripheral } from "@/lib/hardwareEngine";
+import { readJsonObjectBody } from "@/lib/http";
+import { checkRateLimit, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+
+const MAX_BODY_BYTES = 8 * 1024;
+const MAX_PROMPT_LENGTH = 1000;
+const AI_TIMEOUT_MS = 15_000;
+const RATE_LIMIT = { bucket: "generate", limit: 10, windowMs: 60_000 };
 
 interface AiIntent {
   boardId: string;
   peripherals: string[];
+}
+
+/** Carries only a provider name and HTTP status: never the raw upstream body. */
+class UpstreamRequestError extends Error {
+  constructor(provider: string, status: number) {
+    super(`${provider} request failed with status ${status}`);
+    this.name = "UpstreamRequestError";
+  }
 }
 
 const SYSTEM_PROMPT = `You translate hardware project descriptions into a JSON plan.
@@ -51,9 +66,9 @@ async function interpretWithOpenAI(prompt: string, apiKey: string): Promise<AiIn
         { role: "user", content: prompt },
       ],
     }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
-  if (!response.ok) throw new Error(`OpenAI returned ${response.status}`);
+  if (!response.ok) throw new UpstreamRequestError("OpenAI", response.status);
   const data = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
   };
@@ -63,19 +78,20 @@ async function interpretWithOpenAI(prompt: string, apiKey: string): Promise<AiIn
 }
 
 async function interpretWithGemini(prompt: string, apiKey: string): Promise<AiIntent | null> {
+  // Keep the key out of the URL (and therefore out of logs and error messages).
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: `${SYSTEM_PROMPT}\n\nProject: ${prompt}` }] }],
         generationConfig: { temperature: 0, responseMimeType: "application/json" },
       }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     },
   );
-  if (!response.ok) throw new Error(`Gemini returned ${response.status}`);
+  if (!response.ok) throw new UpstreamRequestError("Gemini", response.status);
   const data = (await response.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
@@ -85,36 +101,45 @@ async function interpretWithGemini(prompt: string, apiKey: string): Promise<AiIn
 }
 
 export async function POST(request: Request) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return Response.json({ error: "Request body must be a JSON object" }, { status: 400 });
+  const limit = checkRateLimit({ ...RATE_LIMIT, key: getClientIp(request) });
+  if (!limit.allowed) {
+    return rateLimitResponse(limit.retryAfterSeconds);
   }
 
-  const prompt = (body as Record<string, unknown>).prompt;
-  if (typeof prompt !== "string" || prompt.trim().length === 0) {
+  const parsed = await readJsonObjectBody(request, MAX_BODY_BYTES);
+  if (!parsed.ok) {
+    return Response.json({ error: parsed.error }, { status: parsed.status });
+  }
+
+  const rawPrompt = parsed.value.prompt;
+  if (typeof rawPrompt !== "string") {
     return Response.json({ error: "A non-empty prompt is required" }, { status: 400 });
   }
-  if (prompt.length > 2000) {
-    return Response.json({ error: "Prompt is too long (max 2000 characters)" }, { status: 400 });
+  const prompt = rawPrompt.trim();
+  if (prompt.length === 0) {
+    return Response.json({ error: "A non-empty prompt is required" }, { status: 400 });
+  }
+  if (prompt.length > MAX_PROMPT_LENGTH) {
+    return Response.json(
+      { error: `Prompt is too long (max ${MAX_PROMPT_LENGTH} characters)` },
+      { status: 400 },
+    );
   }
 
   const deterministic: CircuitGenerationResult = await generateCircuitFromPrompt(prompt);
 
   const openAiKey = process.env.OPENAI_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
-  if (!openAiKey && !geminiKey) {
+  const provider = openAiKey ? "openai" : geminiKey ? "gemini" : null;
+  if (!provider) {
     return Response.json({ ...deterministic, usedAI: false });
   }
 
   try {
-    const intent = openAiKey
-      ? await interpretWithOpenAI(prompt, openAiKey)
-      : await interpretWithGemini(prompt, geminiKey as string);
+    const intent =
+      provider === "openai"
+        ? await interpretWithOpenAI(prompt, openAiKey as string)
+        : await interpretWithGemini(prompt, geminiKey as string);
     if (intent) {
       const result = buildCircuitFromPlan({
         boardId: intent.boardId,
@@ -124,11 +149,19 @@ export async function POST(request: Request) {
         ...result,
         presetUsed: deterministic.presetUsed,
         usedAI: true,
-        aiProvider: openAiKey ? "openai" : "gemini",
+        aiProvider: provider,
       });
     }
   } catch (error) {
-    console.warn("AI interpretation failed, using deterministic parser:", error);
+    // Log only the error kind: upstream bodies, prompt echoes, and request URLs
+    // (which could contain credentials) must not end up in logs.
+    const reason =
+      error instanceof UpstreamRequestError
+        ? error.message
+        : error instanceof Error
+          ? error.name
+          : "unknown error";
+    console.warn(`AI interpretation failed (${provider}); using deterministic parser:`, reason);
   }
 
   return Response.json({ ...deterministic, usedAI: false });

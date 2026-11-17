@@ -17,7 +17,7 @@ test.describe("PinCheck smoke tests", () => {
 
     await expect(page.getByText(/health 100/).first()).toBeVisible();
     await expect(page.getByText("No critical issues.", { exact: false })).toBeVisible();
-    await expect(page.getByRole("img", { name: "Interactive circuit schematic" })).toBeVisible();
+    await expect(page.getByLabel("Interactive circuit schematic")).toBeVisible();
   });
 
   test("auto-fix repairs the deliberately buggy preset", async ({ page }) => {
@@ -75,6 +75,18 @@ test.describe("PinCheck smoke tests", () => {
     await expect(page).toHaveURL(/\/c\/[A-Za-z0-9_-]+/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(title);
     await expect(page.getByText("No issues detected. This wiring passes every modeled check.")).toBeVisible();
+
+    // The test database is shared across the suite, so remove the row this test created.
+    const circuitId = new URL(page.url()).pathname.split("/").filter(Boolean).at(-1);
+    expect(circuitId).toBeTruthy();
+    if (!circuitId) {
+      throw new Error("Expected the share URL to contain a circuit id");
+    }
+    const deleted = await page.request.delete(`/api/circuits/${circuitId}`);
+    expect(deleted.status()).toBe(204);
+
+    const gone = await page.request.get(`/api/circuits/${circuitId}`);
+    expect(gone.status()).toBe(404);
   });
 
   test("lists saved circuits in the gallery", async ({ page }) => {

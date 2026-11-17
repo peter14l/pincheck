@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:test": "tsx scripts/prepare-test-db.ts && next dev -p 3100",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -13,6 +14,7 @@
     "test:e2e": "playwright test",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+    "db:test:prepare": "tsx scripts/prepare-test-db.ts",
     "db:reset": "prisma migrate reset --force"
   },
   "dependencies": {
@@ -24,6 +26,7 @@
     "react-dom": "19.3.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.65.1",
     "@tailwindcss/turbopack": "4.3.3",
     "@types/better-sqlite3": "^9.6.0",

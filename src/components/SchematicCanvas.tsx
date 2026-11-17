@@ -204,13 +204,16 @@ export default function SchematicCanvas({
   };
 
   return (
-    <div className="relative w-full" style={{ background: BG }}>
+    <div
+      className="relative w-full"
+      style={{ background: BG }}
+      role="group"
+      aria-label="Interactive circuit schematic"
+    >
       <svg
         className="w-full"
         viewBox={`0 0 1200 ${canvasHeight}`}
         style={{ height: canvasHeight }}
-        role="img"
-        aria-label="Interactive circuit schematic"
       >
         <defs>
           <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
@@ -237,7 +240,7 @@ export default function SchematicCanvas({
                     key={pin.id}
                     role="button"
                     tabIndex={readOnly ? -1 : 0}
-                    aria-label={`${board.name} pin ${pin.label}${isFaulty ? ", has a diagnostic" : ""}`}
+                    aria-label={`${pin.label} on ${board.name}${isFaulty ? ", has a diagnostic" : ""}`}
                     aria-pressed={isSelected}
                     onClick={() => handlePinClick(component.id, pin.id)}
                     onKeyDown={(event) => {
@@ -282,7 +285,7 @@ export default function SchematicCanvas({
                     key={req.name}
                     role="button"
                     tabIndex={readOnly ? -1 : 0}
-                    aria-label={`${peripheral.name} pin ${req.name}${isFaulty ? ", has a diagnostic" : ""}`}
+                    aria-label={`${req.name} on ${peripheral.name}${isFaulty ? ", has a diagnostic" : ""}`}
                     aria-pressed={isSelected}
                     onClick={() => handlePinClick(component.id, req.name)}
                     onKeyDown={(event) => {
@@ -334,7 +337,11 @@ export default function SchematicCanvas({
                 opacity={0.9}
                 role={readOnly ? undefined : "button"}
                 tabIndex={readOnly ? -1 : 0}
-                aria-label={`${wireLabel(wire)}${isError ? ", diagnostic on this wire" : ""}`}
+                aria-label={
+                  readOnly
+                    ? undefined
+                    : `${wireLabel(wire)}${isError ? ", diagnostic on this wire" : ""}`
+                }
                 onClick={() => {
                   if (readOnly) return;
                   setSelectedWireId(wire.id);
@@ -385,6 +392,10 @@ export default function SchematicCanvas({
           read-only shared view
         </div>
       )}
+
+      <p className="sr-only">
+        Select a board pin, then a peripheral pin, to add a wire. Select a wire to delete it.
+      </p>
 
       {!readOnly && selected && (
         <div className="absolute bottom-4 left-4 rounded bg-slate-900/90 px-3 py-2 font-mono text-xs text-slate-200">

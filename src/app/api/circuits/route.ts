@@ -10,6 +10,11 @@ import {
   validateDescription,
   validateTitle,
 } from "@/lib/circuitInput";
+import { readJsonObjectBody } from "@/lib/http";
+import { checkRateLimit, getClientIp, rateLimitResponse } from "@/lib/rateLimit";
+
+const MAX_BODY_BYTES = 256 * 1024;
+const RATE_LIMIT = { bucket: "circuits:create", limit: 20, windowMs: 60_000 };
 
 export async function GET() {
   try {
@@ -51,18 +56,17 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  const limit = checkRateLimit({ ...RATE_LIMIT, key: getClientIp(request) });
+  if (!limit.allowed) {
+    return rateLimitResponse(limit.retryAfterSeconds);
   }
 
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return Response.json({ error: "Request body must be a JSON object" }, { status: 400 });
+  const parsed = await readJsonObjectBody(request, MAX_BODY_BYTES);
+  if (!parsed.ok) {
+    return Response.json({ error: parsed.error }, { status: parsed.status });
   }
 
-  const input = body as Record<string, unknown>;
+  const input = parsed.value;
   const title = validateTitle(input.title);
   if (!title) {
     return Response.json(

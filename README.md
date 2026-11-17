@@ -137,6 +137,19 @@ The unit suite covers state normalization, linter rules, generator behavior, aut
 
 ---
 
+## Screenshots
+
+![PinCheck home](./docs/screenshots/home.png)
+![Circuit gallery](./docs/screenshots/gallery.png)
+![Shared circuit](./docs/screenshots/share.png)
+
+## Deployment
+
+PinCheck stores saved circuits in SQLite. It is designed for a single instance
+with a persistent disk, not for serverless platforms. See
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) for the Docker image, Compose stack,
+backup/restore, migrations, and reverse-proxy guidance.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

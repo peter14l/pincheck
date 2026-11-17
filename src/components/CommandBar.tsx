@@ -128,7 +128,7 @@ export default function CommandBar({ onGenerate }: CommandBarProps) {
   const wireCount = circuitState?.wires.length ?? 0;
   const scoreColor =
     healthScore === null
-      ? "text-slate-500"
+      ? "text-slate-400"
       : healthScore >= 80
         ? "text-[#10B981]"
         : healthScore >= 50
@@ -141,9 +141,9 @@ export default function CommandBar({ onGenerate }: CommandBarProps) {
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2">
             <span className="flex h-2 w-2 rounded-full bg-[#10B981] animate-pulse" aria-hidden="true" />
-            <span className="font-mono text-xs font-semibold tracking-wider text-[#10B981] uppercase">
+            <h1 className="font-mono text-xs font-semibold tracking-wider text-[#10B981] uppercase">
               pincheck &middot; prompt-to-verified-pinout
-            </span>
+            </h1>
           </div>
 
           <div className="relative">
@@ -187,10 +187,10 @@ export default function CommandBar({ onGenerate }: CommandBarProps) {
               <span className={`font-mono text-xs font-medium ${scoreColor}`}>
                 {boardName || "\u2014"}
               </span>
-              <span className="font-mono text-xs text-slate-500">|</span>
+              <span className="font-mono text-xs text-slate-400">|</span>
               <span className="font-mono text-xs text-slate-400">peripherals:</span>
               <span className="font-mono text-xs font-medium text-white">{pinCount}</span>
-              <span className="font-mono text-xs text-slate-500">|</span>
+              <span className="font-mono text-xs text-slate-400">|</span>
               <span className="font-mono text-xs text-slate-400">wires:</span>
               <span className="font-mono text-xs font-medium text-white">{wireCount}</span>
               {usedAI && (
@@ -204,7 +204,7 @@ export default function CommandBar({ onGenerate }: CommandBarProps) {
                 aria-live="polite"
                 className={`font-mono text-xs font-bold tracking-tight rounded px-2 py-1 ${
                   healthScore === null
-                    ? "bg-[#111928]/50 border border-[#273042]/50 text-slate-500"
+                    ? "bg-[#111928]/50 border border-[#273042]/50 text-slate-400"
                     : healthScore >= 80
                       ? "bg-[#10B981]/10 border border-[#10B981]/30 text-[#10B981]"
                       : healthScore >= 50
@@ -220,7 +220,7 @@ export default function CommandBar({ onGenerate }: CommandBarProps) {
                 disabled={loading || !circuitState || !boardId}
                 className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border font-mono text-xs font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                   loading || !circuitState || !boardId
-                    ? "border-[#273042]/50 bg-[#111928]/40 text-slate-500"
+                    ? "border-[#273042]/50 bg-[#111928]/40 text-slate-400"
                     : "border-[#10B981] bg-[#10B981]/10 text-[#10B981] hover:bg-[#10B981]/20 hover:border-[#10B981]/60"
                 }`}
               >
