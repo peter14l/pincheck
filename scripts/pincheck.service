@@ -1,0 +1,30 @@
+# Drop this in /etc/systemd/system/pincheck.service and run:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pincheck
+#
+# Requires: a persistent directory for the SQLite database (see
+# docs/DEPLOYMENT.md §11) and a user with read/write access to it.
+# Backups are still your responsibility (docs/DEPLOYMENT.md §6).
+
+[Unit]
+Description=PinCheck
+After=network.target
+
+[Service]
+Type=simple
+User=pincheck
+WorkingDirectory=/opt/pincheck
+Environment=NODE_ENV=production
+Environment=DATABASE_URL=file:/var/lib/pincheck/pincheck.db
+Environment=NEXT_PUBLIC_SITE_URL=https://pincheck.example
+# Optional AI interpretation. Set these or leave them unset.
+Environment=OPENAI_API_KEY=${OPENAI_API_KEY:-}
+Environment=OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+Environment=GEMINI_API_KEY=${GEMINI_API_KEY:-}
+ExecStartPre=/opt/pincheck/node_modules/.bin/prisma migrate deploy
+ExecStart=/opt/pincheck/node_modules/.bin/next start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

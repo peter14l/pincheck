@@ -1,13 +1,14 @@
 # Deploying PinCheck
 
 PinCheck is a Next.js server that stores saved circuits in a SQLite database.
-This document describes the supported self-hosting path: a Docker image plus a
-persistent volume for the database.
+This document describes the supported self-hosting path: a Node.js process
+with a persistent directory for the database. Docker is one convenient way to
+run it — see [§13 Non-Docker alternatives](#13-non-docker-alternatives) for
+options that do not require Docker.
 
-> **Short version:** run `docker compose up -d --build`, point
-> `DATABASE_URL` at an absolute path inside the `/data` volume, and keep a
-> backup before every upgrade. Serverless platforms are not suitable for this
-> app's SQLite storage.
+> **Short version:** install Node.js 22+, run `npm run db:migrate` and
+> `npm run db:seed` against a `DATABASE_URL` on a persistent disk, then
+> `npm start`. For the packaged path, `docker compose up -d --build`.
 
 ---
 
@@ -446,7 +447,87 @@ change and is not covered by this deployment path.
 
 ---
 
-## 13. Known limitations
+## 13. Non-Docker alternatives
+
+Docker is the documented path, but PinCheck is a plain Node.js process and runs
+equally well without it. The only hard requirement is a **persistent, writable
+local filesystem with working file locks** for SQLite (see §11).
+
+### 13.1 Bare-metal / VPS (no container)
+
+```bash
+# 1. Install Node.js 22+ (see .nvmrc: 22.12.0).
+# 2. Clone and install.
+git clone https://github.com/peter14l/pincheck.git && cd pincheck
+npm ci
+
+# 3. Point DATABASE_URL at a persistent path, then migrate and seed.
+export DATABASE_URL=/var/lib/pincheck/pincheck.db
+npm run db:migrate
+npm run db:seed
+
+# 4. Serve. Behind a reverse proxy, set NEXT_PUBLIC_SITE_URL.
+npm run build
+npm start
+```
+
+`scripts/docker-entrypoint.sh` does two things for the Docker image: validate
+`DATABASE_URL` and run `prisma migrate deploy` before `next start`. The
+equivalent commands are `npm run db:migrate` and `npm start`.
+
+### 13.2 systemd service (Linux)
+
+`scripts/pincheck.service` can be dropped into `/etc/systemd/system/`:
+
+```ini
+[Unit]
+Description=PinCheck
+After=network.target
+
+[Service]
+Type=simple
+User=pincheck
+WorkingDirectory=/opt/pincheck
+Environment=NODE_ENV=production
+Environment=DATABASE_URL=file:/var/lib/pincheck/pincheck.db
+Environment=NEXT_PUBLIC_SITE_URL=https://pincheck.example
+ExecStartPre=/opt/pincheck/node_modules/.bin/prisma migrate deploy
+ExecStart=/opt/pincheck/node_modules/.bin/next start
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then `sudo systemctl enable --now pincheck`. Backups are still your
+responsibility (§6).
+
+### 13.3 Fly.io, Railway, Render (managed, one instance)
+
+These platforms run the app directly and offer an attached persistent disk:
+
+| Platform | How |
+| --- | --- |
+| Fly.io | `fly launch`, then `fly volumes create --size 1 /data` and `flyctl volumes attach`. One machine only. |
+| Railway | Add a `Volume` service, mount it, set `DATABASE_URL=file:/data/pincheck.db`, disable horizontal scaling. |
+| Render | Create a Web Service with a Persistent Disk at `/data`, same env vars. |
+
+The `Dockerfile` still works on all three if you prefer the container path.
+
+### 13.4 PM2 / process managers
+
+```bash
+npm install -g pm2
+npm run build
+pm2 start "next start" --name pincheck --env DATABASE_URL=/var/lib/pincheck/pincheck.db
+```
+
+Run `prisma migrate deploy` separately before the first start and after every
+deployment that ships a new migration.
+
+---
+
+## 14. Known limitations
 
 - **Single writer.** SQLite allows one writer at a time. Run one container (or
   one replica) per database file. `database is locked` errors usually mean a

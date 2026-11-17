@@ -153,9 +153,11 @@ The unit suite covers state normalization, linter rules, generator behavior, aut
 ## Deployment
 
 PinCheck stores saved circuits in SQLite. It is designed for a single instance
-with a persistent disk, not for serverless platforms. See
-[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) for the Docker image, Compose stack,
-backup/restore, migrations, and reverse-proxy guidance.
+with a persistent disk, not for serverless platforms. The packaged path is
+Docker (`docker compose up -d --build`), but the app is a plain Node.js process
+and runs without Docker too — see [docs/DEPLOYMENT.md §13 Non-Docker
+alternatives](./docs/DEPLOYMENT.md#13-non-docker-alternatives) for a bare-metal
+VPS, systemd, PM2, and managed-platform (Fly.io / Railway / Render) setups.
 
 ## License
 
